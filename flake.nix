@@ -19,15 +19,22 @@
           version = "0.1.4";
           format = "wheel";
           src = pkgs.fetchurl {
-            url = "https://files.pythonhosted.org/packages/b9/62/db55476d05d5db9115ec6a2569b92207b5a88c7b80a37e19a9d70104e76a/lib_one_proto-0.1.4-py3-none-any.whl";
-            hash = "sha256-c3cnveXBY9IL66SD7Ln9U1eSm7o1ddUeRjeZ5ljaefg=";
+            url = "https://files.pythonhosted.org/packages/2e/c7/5cffb4cfe7715c9c2ce86eab23ea0ebddd3cd0c99eefa06ee3ee9f4a292a/lib_one_proto-0.1.4-py3-none-any.whl";
+            hash = "sha256-58oMJ9SZrf/9W1REWy2OHn9+Ipby5PyeY8464mhV5K0=";
           };
+          propagatedBuildInputs = [ pkgs.python3Packages.protobuf ];
+          pythonImportsCheck = [ "lib_one_proto" ];
+          pythonCatchConflictsPhase = "true";
+          pythonRemoveBinBytecodePhase = "true";
+          dontCheckRuntimeDeps = true;
         };
 
       in {
         default = pkgs.python3Packages.buildPythonApplication {
           pname = "insta360-server";
           version = "0.1.0";
+          pyproject = true;
+          build-system = [ pkgs.python3Packages.setuptools ];
 
           src = ./insta360-server;
 
@@ -46,7 +53,7 @@ setup(
     py_modules=['server'],
     entry_points={
         'console_scripts': [
-            'insta360-server=server:main',
+            'insta360-server=server:main_entry',
         ],
     },
 )
