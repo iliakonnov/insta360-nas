@@ -231,8 +231,11 @@ async def main():
         finally:
             await runner.cleanup()
 
-if __name__ == "__main__":
+def main_entry():
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Server stopped")
+
+if __name__ == "__main__":
+    main_entry()
