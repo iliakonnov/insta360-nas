@@ -1,0 +1,3 @@
+[submodule "third-party/insta360"]
+	path = third-party/insta360
+	url = https://gitlab.com/whitebox-aero/insta360
