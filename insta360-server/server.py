@@ -119,17 +119,20 @@ class RTMPHandler:
                 if hasattr(resp_msg.value.battery_status, "level"):
                     resp_msg.value.battery_status.level = 80
         elif msg_code == PHONE_COMMAND_GET_FILE_LIST:
-            # Need to populate from self.media_dir
-            for root, dirs, files in os.walk(self.media_dir):
-                for file in files:
-                    # Ignore non-media for now?
-                    if file.startswith('.'):
-                        continue
-                    full_path = os.path.join(root, file)
-                    rel_path = os.path.relpath(full_path, self.media_dir)
-                    # Convert to /DCIM/ format
-                    uri = f"/DCIM/{rel_path}"
-                    resp_msg.uri.append(uri)
+            # Iterate over top-level directories to find Camera01
+            for top_level in os.listdir(self.media_dir):
+                top_level_path = os.path.join(self.media_dir, top_level)
+                if os.path.isdir(top_level_path):
+                    camera01_path = os.path.join(top_level_path, "Camera01")
+                    if os.path.isdir(camera01_path):
+                        for root, dirs, files in os.walk(camera01_path):
+                            for file in files:
+                                if file.startswith('.'):
+                                    continue
+                                full_path = os.path.join(root, file)
+                                rel_path = os.path.relpath(full_path, camera01_path)
+                                uri = f"/DCIM/Camera01/{rel_path}"
+                                resp_msg.uri.append(uri)
             # Some pb versions use totalCount, others might use total_count or it might be missing
             if hasattr(resp_msg, "totalCount"):
                 resp_msg.totalCount = len(resp_msg.uri)
@@ -199,37 +202,86 @@ async def main():
     logger.info(f"RTMP Server started on {args.bind}:6666")
 
     async def handle_http_request(request):
-        rel_path = request.path
-        if rel_path.startswith('/DCIM/'):
-            rel_path = rel_path[6:] # strip /DCIM/
+        req_path = request.path
+        rel_path = req_path.lstrip('/')
+        if rel_path.startswith('DCIM/'):
+            rel_path = rel_path[5:]
 
-        full_path = os.path.join(args.dir, rel_path)
-
-        if os.path.isdir(full_path):
-            # Ensure path ends with / for correct HTML relative linking
-            if not request.path.endswith('/'):
-                raise web.HTTPFound(request.path + '/')
-
-            # Generate HTML listing
+        # Handle requests to /DCIM or /DCIM/
+        if rel_path == 'DCIM' or rel_path == '':
+            if not req_path.endswith('/'):
+                raise web.HTTPFound(req_path + '/')
             html = "<html><body><table><tbody>"
-            for item in sorted(os.listdir(full_path)):
-                if item.startswith('.'):
-                    continue
-                item_path = os.path.join(full_path, item)
-                is_dir = os.path.isdir(item_path)
-
-                size_str = "directory" if is_dir else str(os.path.getsize(item_path))
-                link_path = f"{item}/" if is_dir else item
-
-                html += f'<tr><td><a href="{link_path}">{item}</a></td><td></td><td>{size_str}</td></tr>'
+            html += '<tr><td><a href="Camera01/">Camera01</a></td><td></td><td>directory</td></tr>'
             html += "</tbody></table></body></html>"
             return web.Response(text=html, content_type='text/html')
 
-        elif os.path.isfile(full_path):
-            return web.FileResponse(full_path)
+        # Handle requests to /DCIM/Camera01...
+        if rel_path == 'Camera01' or rel_path.startswith('Camera01/'):
+            sub_path = rel_path[8:].lstrip('/')
 
-        else:
-            raise web.HTTPNotFound()
+            if not sub_path:
+                # Root of Camera01 listing: merge all Camera01 contents
+                if not req_path.endswith('/'):
+                    raise web.HTTPFound(req_path + '/')
+
+                merged_items = {}
+                for top_level in os.listdir(args.dir):
+                    top_level_path = os.path.join(args.dir, top_level)
+                    if os.path.isdir(top_level_path):
+                        camera01_path = os.path.join(top_level_path, "Camera01")
+                        if os.path.isdir(camera01_path):
+                            for item in os.listdir(camera01_path):
+                                if item.startswith('.'):
+                                    continue
+                                item_path = os.path.join(camera01_path, item)
+                                merged_items[item] = os.path.isdir(item_path)
+
+                html = "<html><body><table><tbody>"
+                for item in sorted(merged_items.keys()):
+                    is_dir = merged_items[item]
+                    size_str = "directory" if is_dir else ""
+                    # Actually get file size if it's not a directory?
+                    # For simplicity we might just not show size for merged files unless we want to search for it,
+                    # but let's just find the file to get its size.
+                    if not is_dir:
+                        # Find the first one to get size
+                        for top_level in os.listdir(args.dir):
+                            cand = os.path.join(args.dir, top_level, "Camera01", item)
+                            if os.path.isfile(cand):
+                                size_str = str(os.path.getsize(cand))
+                                break
+
+                    link_path = f"{item}/" if is_dir else item
+                    html += f'<tr><td><a href="{link_path}">{item}</a></td><td></td><td>{size_str}</td></tr>'
+                html += "</tbody></table></body></html>"
+                return web.Response(text=html, content_type='text/html')
+
+            else:
+                # Find the file or sub-directory in one of the top-level directories
+                for top_level in os.listdir(args.dir):
+                    top_level_path = os.path.join(args.dir, top_level)
+                    if os.path.isdir(top_level_path):
+                        candidate = os.path.join(top_level_path, "Camera01", sub_path)
+                        if os.path.exists(candidate):
+                            if os.path.isdir(candidate):
+                                if not req_path.endswith('/'):
+                                    raise web.HTTPFound(req_path + '/')
+                                html = "<html><body><table><tbody>"
+                                for item in sorted(os.listdir(candidate)):
+                                    if item.startswith('.'):
+                                        continue
+                                    item_path = os.path.join(candidate, item)
+                                    is_dir = os.path.isdir(item_path)
+                                    size_str = "directory" if is_dir else str(os.path.getsize(item_path))
+                                    link_path = f"{item}/" if is_dir else item
+                                    html += f'<tr><td><a href="{link_path}">{item}</a></td><td></td><td>{size_str}</td></tr>'
+                                html += "</tbody></table></body></html>"
+                                return web.Response(text=html, content_type='text/html')
+                            else:
+                                return web.FileResponse(candidate)
+
+        raise web.HTTPNotFound()
 
     # Start HTTP server
     app = web.Application(middlewares=[logging_middleware])
