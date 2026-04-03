@@ -2,7 +2,14 @@ import argparse
 import asyncio
 import os
 import struct
+import logging
 from aiohttp import web
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger('insta360-server')
 
 from lib_one_proto import (
     get_options_pb2,
@@ -33,6 +40,20 @@ PHONE_COMMAND_SET_PHOTOGRAPHY_OPTIONS = 9
 PHONE_COMMAND_GET_PHOTOGRAPHY_OPTIONS = 10
 PHONE_COMMAND_GET_FILE_LIST = 13
 PHONE_COMMAND_GET_CURRENT_CAPTURE_STATUS = 15
+
+@web.middleware
+async def logging_middleware(request, handler):
+    logger.info(f"HTTP Request: {request.method} {request.path} from {request.remote}")
+    try:
+        response = await handler(request)
+        logger.info(f"HTTP Response: {response.status} for {request.method} {request.path}")
+        return response
+    except web.HTTPException as e:
+        logger.warning(f"HTTP Exception: {e.status} for {request.method} {request.path}")
+        raise
+    except Exception as e:
+        logger.error(f"HTTP Error handling {request.method} {request.path}: {e}")
+        raise
 
 # Response codes
 RESPONSE_CODE_OK = 200
@@ -80,10 +101,10 @@ class RTMPHandler:
         msg_code = struct.unpack("<H", pkt_data[3:5])[0]
         seq = struct.unpack("<I", pkt_data[6:9] + b"\x00")[0]
 
-        print(f"Received msg_code: {msg_code}, seq: {seq}", flush=True)
+        logger.info(f"RTMP Request Received - msg_code: {msg_code}, seq: {seq}, payload_size: {len(body)}")
 
         if msg_code not in pb_resp_classes:
-            print(f"Unknown message code: {msg_code}", flush=True)
+            logger.warning(f"RTMP Request Unknown message code: {msg_code}")
             return None
 
         RespClass = pb_resp_classes[msg_code]
@@ -116,11 +137,12 @@ class RTMPHandler:
                 resp_msg.total_count = len(resp_msg.uri)
         # All other commands just get an empty/default OK response which is fine.
 
+        logger.info(f"RTMP Response Sent - msg_code: {msg_code}, seq: {seq}, response: {resp_msg}")
         return self._pack_response(msg_code, seq, resp_msg)
 
 async def handle_client(reader, writer, rtmp_handler):
     peername = writer.get_extra_info('peername')
-    print(f"Accepted connection from {peername}", flush=True)
+    logger.info(f"Accepted connection from {peername}")
 
     # Send SYNC packet with length prefix
     sync_packet = bytearray(struct.pack("<i", len(PKT_SYNC) + 4))
@@ -152,10 +174,10 @@ async def handle_client(reader, writer, rtmp_handler):
                 await writer.drain()
 
         except asyncio.IncompleteReadError:
-            print(f"Client {peername} disconnected.", flush=True)
+            logger.info(f"Client {peername} disconnected.")
             break
         except Exception as e:
-            print(f"Error handling client: {e}", flush=True)
+            logger.error(f"Error handling client {peername}: {e}")
             break
 
     writer.close()
@@ -174,7 +196,7 @@ async def main():
         lambda r, w: handle_client(r, w, rtmp_handler),
         args.bind, 6666
     )
-    print(f"RTMP Server started on {args.bind}:6666", flush=True)
+    logger.info(f"RTMP Server started on {args.bind}:6666")
 
     async def handle_http_request(request):
         rel_path = request.path
@@ -210,7 +232,7 @@ async def main():
             raise web.HTTPNotFound()
 
     # Start HTTP server
-    app = web.Application()
+    app = web.Application(middlewares=[logging_middleware])
     app.router.add_route('GET', '/{tail:.*}', handle_http_request)
     runner = web.AppRunner(app)
     await runner.setup()
@@ -218,9 +240,9 @@ async def main():
 
     try:
         await http_site.start()
-        print(f"HTTP Server started on {args.bind}:80")
+        logger.info(f"HTTP Server started on {args.bind}:80")
     except Exception as e:
-        print(f"Failed to start HTTP server on port 80: {e}")
+        logger.error(f"Failed to start HTTP server on port 80: {e}")
         # Could fallback to another port if not running as root, but user requested 80.
 
     async with rtmp_server:
@@ -235,7 +257,7 @@ def main_entry():
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("Server stopped")
+        logger.info("Server stopped")
 
 if __name__ == "__main__":
     main_entry()
