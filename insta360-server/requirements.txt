@@ -2,3 +2,4 @@ aiohttp
 -e ../third-party/insta360-lib-one-proto
 -e ../third-party/insta360
 bless
+aiohttp-jinja2

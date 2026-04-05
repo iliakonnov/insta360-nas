@@ -1,0 +1,37 @@
+<html><body>
+<h1>Dashboard - {{ user.name }}</h1>
+
+<h2>Exported Directories</h2>
+<table>
+    <tr><th>Directory</th><th>Exported</th><th>Action</th></tr>
+    {% for d in directories %}
+    <tr>
+        <td>{{ d.directory }}</td>
+        <td><input type='checkbox' name='is_exported' {{ "checked" if d.is_exported else "" }} disabled> {{ d.is_exported }}</td>
+        <td>
+            <form style='display:inline;' method='POST'>
+                <input type='hidden' name='action' value='toggle_export'>
+                <input type='hidden' name='directory' value='{{ d.directory }}'>
+                <input type='hidden' name='is_exported' value='{{ "" if d.is_exported else "on" }}'>
+                <button type='submit'>Toggle</button>
+            </form>
+        </td>
+    </tr>
+    {% endfor %}
+</table>
+
+<h2>Hidden Files</h2>
+<ul>
+    {% for uri in hidden_files %}
+    <li>{{ uri }}
+        <form style='display:inline;' method='POST'>
+            <input type='hidden' name='action' value='undelete'>
+            <input type='hidden' name='uri' value='{{ uri }}'>
+            <button type='submit'>Undelete</button>
+        </form>
+    </li>
+    {% else %}
+    <li>No hidden files.</li>
+    {% endfor %}
+</ul>
+</body></html>

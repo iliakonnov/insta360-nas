@@ -1,0 +1,13 @@
+<html><body>
+<table>
+    <tbody>
+        {% for item in items %}
+        <tr>
+            <td><a href="{{ item.link }}">{{ item.name }}</a></td>
+            <td></td>
+            <td>{{ item.size }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</body></html>

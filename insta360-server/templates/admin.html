@@ -1,0 +1,40 @@
+<html><body>
+<h1>Admin Panel</h1>
+<h2>Users</h2>
+<table border='1'>
+    <tr>
+        <th>ID</th>
+        <th>Name</th>
+        <th>Admin</th>
+        <th>Authorized</th>
+        <th>Directory Access</th>
+    </tr>
+    {% for u in users %}
+    <tr>
+        <td>{{ u.id }}</td>
+        <td>{{ u.name }}</td>
+        <td>{{ "Yes" if u.is_admin else "No" }}</td>
+        <td>
+            <form style='display:inline;' method='POST'>
+                <input type='hidden' name='action' value='toggle_authorize'>
+                <input type='hidden' name='user_id' value='{{ u.id }}'>
+                <input type='hidden' name='authorized' value='{{ "" if u.authorized else "on" }}'>
+                <button type='submit'>{{ "Revoke Auth" if u.authorized else "Grant Auth" }}</button>
+            </form>
+        </td>
+        <td>
+            {% for d in top_levels %}
+            {% set has_access = d in u_access[u.id] %}
+            <form style='display:inline; margin-right: 10px;' method='POST'>
+                <input type='hidden' name='action' value='toggle_access'>
+                <input type='hidden' name='user_id' value='{{ u.id }}'>
+                <input type='hidden' name='directory' value='{{ d }}'>
+                <input type='hidden' name='access_granted' value='{{ "" if has_access else "on" }}'>
+                <button type='submit'>{{ ("Revoke " ~ d) if has_access else ("Grant " ~ d) }}</button>
+            </form>
+            {% endfor %}
+        </td>
+    </tr>
+    {% endfor %}
+</table>
+</body></html>
