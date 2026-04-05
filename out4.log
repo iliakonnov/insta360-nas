@@ -1,0 +1,6 @@
+2026-04-05 21:36:30,054 - asyncio - DEBUG - Using selector: EpollSelector
+2026-04-05 21:36:30,057 - insta360-server - INFO - RTSP Server started on 127.0.0.1:6666
+2026-04-05 21:36:30,058 - insta360-server - INFO - HTTP Server started on 127.0.0.1:8080
+2026-04-05 21:36:47,417 - insta360-server - INFO - Accepted connection from ('127.0.0.1', 39241)
+2026-04-05 21:36:47,418 - insta360-server - DEBUG - Received sync
+2026-04-05 21:43:25,669 - insta360-server - INFO - Client ('127.0.0.1', 39241) disconnected.

@@ -39,7 +39,9 @@ from lib_one_proto import (
     get_current_capture_status_pb2,
     check_authorization_pb2,
     wifi_mode_pb2,
+    delete_files_pb2,
 )
+from database import Database
 
 PKT_SYNC = b"\x06\x00\x00syNceNdinS"
 PKT_KEEPALIVE = b"\x05\x00\x00"
@@ -55,6 +57,7 @@ PHONE_COMMAND_GET_OPTIONS = 8
 PHONE_COMMAND_SET_PHOTOGRAPHY_OPTIONS = 9
 PHONE_COMMAND_GET_PHOTOGRAPHY_OPTIONS = 10
 PHONE_COMMAND_GET_FILE_LIST = 13
+PHONE_COMMAND_DELETE_FILES = 12
 PHONE_COMMAND_GET_CURRENT_CAPTURE_STATUS = 15
 PHONE_COMMAND_CHECK_AUTHORIZATION = 39
 PHONE_COMMAND_RESET_WIFI = 125
@@ -91,6 +94,7 @@ pb_resp_classes = {
     PHONE_COMMAND_STOP_LIVE_STREAM: stop_live_stream_pb2.StopLiveStreamResp,
     PHONE_COMMAND_GET_CURRENT_CAPTURE_STATUS: get_current_capture_status_pb2.GetCurrentCaptureStatusResp,
     PHONE_COMMAND_CHECK_AUTHORIZATION: check_authorization_pb2.CheckAuthorizationResp,
+    PHONE_COMMAND_DELETE_FILES: delete_files_pb2.DeleteFilesResp,
 }
 
 class BLEHandler:
@@ -193,10 +197,10 @@ class BLEHandler:
                 asyncio.run_coroutine_threadsafe(send_with_delay(), loop)
 
 class RTMPHandler:
-    def __init__(self, media_dir, authorized_ids=None):
+    def __init__(self, media_dir, db):
         self.media_dir = media_dir
-        self.authorized_ids = authorized_ids if authorized_ids else []
-        self.sessions = {} # Mapping client_id -> authorized_id
+        self.db = db
+        self.sessions = {} # Mapping client_id -> user_id
 
     def _pack_response(self, code, seq, pb_msg):
         pb_bytes = pb_msg.SerializeToString()
@@ -293,7 +297,28 @@ class RTMPHandler:
 
             elif msg_code == PHONE_COMMAND_GET_FILE_LIST:
                 resp_msg = get_file_list_pb2.GetFileListResp()
+                ip = client_id
+                if isinstance(client_id, str) and client_id.startswith("('"):
+                    try:
+                        import ast
+                        ip = ast.literal_eval(client_id)[0]
+                    except Exception:
+                        pass
+                elif isinstance(client_id, tuple):
+                    ip = client_id[0]
+
+                user_id = self.sessions.get(ip)
+                if not user_id:
+                    logger.warning(f"Unauthorized GET_FILE_LIST from IP: {ip}")
+                    return self._pack_response(msg_code, seq, resp_msg)
+
+                allowed_dirs = self.db.get_allowed_directories(user_id)
+                hidden_files = self.db.get_hidden_files(user_id)
+
                 for top_level in os.listdir(self.media_dir):
+                    if top_level not in allowed_dirs:
+                        continue
+
                     top_level_path = os.path.join(self.media_dir, top_level)
                     if os.path.isdir(top_level_path):
                         camera01_path = os.path.join(top_level_path, "Camera01")
@@ -305,21 +330,61 @@ class RTMPHandler:
                                     full_path = os.path.join(root, file)
                                     rel_path = os.path.relpath(full_path, camera01_path)
                                     uri = f"/DCIM/Camera01/{rel_path}"
-                                    resp_msg.uri.append(uri)
+                                    if uri not in hidden_files:
+                                        resp_msg.uri.append(uri)
                 resp_msg.total_count = len(resp_msg.uri)
+            elif msg_code == PHONE_COMMAND_DELETE_FILES:
+                req_msg = delete_files_pb2.DeleteFiles()
+                req_msg.ParseFromString(body)
+                logger.info(f"DeleteFiles request: {req_msg.uri}")
+
+                resp_msg = delete_files_pb2.DeleteFilesResp()
+
+                ip = client_id
+                if isinstance(client_id, str) and client_id.startswith("('"):
+                    try:
+                        import ast
+                        ip = ast.literal_eval(client_id)[0]
+                    except Exception:
+                        pass
+                elif isinstance(client_id, tuple):
+                    ip = client_id[0]
+
+                user_id = self.sessions.get(ip)
+                if not user_id:
+                    logger.warning(f"Unauthorized DELETE_FILES from IP: {ip}")
+                    # If unauthorized, we might mark them all as failed
+                    resp_msg.fail_uri.extend(req_msg.uri)
+                else:
+                    self.db.hide_files(user_id, req_msg.uri)
+                    logger.info(f"Hid files for user {user_id}: {req_msg.uri}")
+
             elif msg_code == PHONE_COMMAND_CHECK_AUTHORIZATION:
                 req_msg = check_authorization_pb2.CheckAuthorization()
                 req_msg.ParseFromString(body)
                 logger.info(f"CheckAuthorization request: {req_msg}")
 
+                user = self.db.get_or_create_user(req_msg.id)
                 resp_msg = check_authorization_pb2.CheckAuthorizationResp()
-                if not self.authorized_ids or req_msg.id in self.authorized_ids:
+
+                if user["authorized"]:
                     logger.info(f"Authorization successful for ID: {req_msg.id}")
                     if client_id:
-                        self.sessions[client_id] = req_msg.id
+                        # Extract IP from client_id (which looks like "('192.168.1.5', 54321)")
+                        ip = client_id
+                        if isinstance(client_id, str) and client_id.startswith("('"):
+                            try:
+                                import ast
+                                ip = ast.literal_eval(client_id)[0]
+                            except Exception:
+                                pass
+                        elif isinstance(client_id, tuple):
+                            ip = client_id[0]
+                        self.sessions[ip] = req_msg.id
+                        logger.info(f"Associated IP {ip} with User {req_msg.id}")
                     resp_msg.authorization_status = check_authorization_pb2.CheckAuthorizationResp.AUTHORIZED
                 else:
-                    logger.warning(f"Authorization failed for ID: {req_msg.id}")
+                    logger.warning(f"Authorization failed for ID: {req_msg.id} - not authorized by admin.")
                     resp_msg.authorization_status = check_authorization_pb2.CheckAuthorizationResp.UNAUTHORIZED
             else:
                 RespClass = pb_resp_classes[msg_code]
@@ -373,8 +438,14 @@ async def handle_client(reader, writer, rtmp_handler):
             logger.info(f"Client {peername} disconnected.")
             break
         except Exception as e:
-            logger.error(f"Error handling client {peername}: {e}")
+            logger.error(f"Error handling client {peername}: {e}", exc_info=True)
             break
+
+    if peername and isinstance(peername, tuple):
+        ip = peername[0]
+        if ip in rtmp_handler.sessions:
+            logger.info(f"Removing active session for disconnected client IP {ip}")
+            del rtmp_handler.sessions[ip]
 
     writer.close()
     await writer.wait_closed()
@@ -389,10 +460,10 @@ async def main():
     parser.add_argument("--no-http", action="store_false", dest="http")
     parser.add_argument("--rtsp", action="store_true", default=True, help="Start RTSP server on port 6666")
     parser.add_argument("--no-rtsp", action="store_false", dest="rtsp")
-    parser.add_argument("--auth-id", action="append", help="Authorized ID(s)")
     args = parser.parse_args()
 
-    rtmp_handler = RTMPHandler(args.dir, authorized_ids=args.auth_id)
+    db = Database(os.path.join(args.dir, "insta360.db"))
+    rtmp_handler = RTMPHandler(args.dir, db)
     tasks = []
 
     if args.ble:
@@ -408,7 +479,154 @@ async def main():
     else:
         rtmp_server = None
 
+    async def handle_admin(request):
+        ip = request.remote
+        user_id = rtmp_handler.sessions.get(ip)
+        if not user_id:
+            raise web.HTTPForbidden(text="Not authorized or no active session.")
+
+        user = db.get_user_by_id(user_id)
+        if not user or not user['is_admin']:
+            raise web.HTTPForbidden(text="Admin access required.")
+
+        if request.method == 'POST':
+            data = await request.post()
+            action = data.get('action')
+            if action == 'toggle_access':
+                target_user_id = data.get('user_id')
+                directory = data.get('directory')
+                access_granted = data.get('access_granted') == 'on'
+
+                if target_user_id and directory:
+                    db.set_directory_access(target_user_id, directory, access_granted)
+            elif action == 'toggle_authorize':
+                target_user_id = data.get('user_id')
+                authorized = data.get('authorized') == 'on'
+                if target_user_id:
+                    db.set_user_authorized(target_user_id, authorized)
+
+            raise web.HTTPFound('/admin')
+
+        all_users = db.get_all_users()
+        all_top_levels = [d for d in os.listdir(args.dir) if os.path.isdir(os.path.join(args.dir, d))]
+
+        html = f"<html><body><h1>Admin Panel</h1>"
+        html += "<h2>Users</h2>"
+        html += "<table border='1'><tr><th>ID</th><th>Name</th><th>Admin</th><th>Authorized</th><th>Directory Access</th></tr>"
+
+        for u in all_users:
+            html += f"<tr>"
+            html += f"<td>{u['id']}</td>"
+            html += f"<td>{u['name']}</td>"
+            html += f"<td>{'Yes' if u['is_admin'] else 'No'}</td>"
+
+            # Auth toggle
+            html += f"<td>"
+            html += f"<form style='display:inline;' method='POST'>"
+            html += f"<input type='hidden' name='action' value='toggle_authorize'>"
+            html += f"<input type='hidden' name='user_id' value='{u['id']}'>"
+            html += f"<input type='hidden' name='authorized' value='{'' if u['authorized'] else 'on'}'>"
+            html += f"<button type='submit'>{'Revoke Auth' if u['authorized'] else 'Grant Auth'}</button>"
+            html += f"</form>"
+            html += f"</td>"
+
+            # Directory toggles
+            user_dirs = db.get_user_directories(u['id'])
+            access_map = {d['directory']: d['access_granted'] for d in user_dirs}
+
+            html += "<td>"
+            for d in all_top_levels:
+                has_access = access_map.get(d, False)
+                html += f"<form style='display:inline; margin-right: 10px;' method='POST'>"
+                html += f"<input type='hidden' name='action' value='toggle_access'>"
+                html += f"<input type='hidden' name='user_id' value='{u['id']}'>"
+                html += f"<input type='hidden' name='directory' value='{d}'>"
+                html += f"<input type='hidden' name='access_granted' value='{'' if has_access else 'on'}'>"
+                html += f"<button type='submit'>{'Revoke ' + d if has_access else 'Grant ' + d}</button>"
+                html += f"</form>"
+            html += "</td>"
+
+            html += "</tr>"
+
+        html += "</table></body></html>"
+        return web.Response(text=html, content_type='text/html')
+
+    async def handle_dashboard(request):
+        ip = request.remote
+        user_id = rtmp_handler.sessions.get(ip)
+        if not user_id:
+            raise web.HTTPForbidden(text="Not authorized or no active session.")
+
+        user = db.get_user_by_id(user_id)
+
+        if request.method == 'POST':
+            data = await request.post()
+            action = data.get('action')
+            if action == 'undelete':
+                uri = data.get('uri')
+                if uri:
+                    db.unhide_file(user_id, uri)
+            elif action == 'toggle_export':
+                directory = data.get('directory')
+                is_exported = data.get('is_exported') == 'on'
+                if directory:
+                    db.set_directory_export(user_id, directory, is_exported)
+
+            raise web.HTTPFound('/dashboard')
+
+        hidden_files = db.get_hidden_files(user_id)
+        directories = db.get_user_directories(user_id)
+
+        html = f"<html><body><h1>Dashboard - {user['name']}</h1>"
+
+        html += "<h2>Exported Directories</h2>"
+        html += "<form method='POST'>"
+        html += "<table><tr><th>Directory</th><th>Exported</th><th>Action</th></tr>"
+        for d in directories:
+            if not d['access_granted']:
+                continue
+            checked = "checked" if d['is_exported'] else ""
+            html += f"<tr>"
+            html += f"<td>{d['directory']}</td>"
+            html += f"<td><input type='checkbox' name='is_exported' {'checked'} disabled> {d['is_exported']}</td>"
+            html += f"<td>"
+            html += f"<form style='display:inline;' method='POST'>"
+            html += f"<input type='hidden' name='action' value='toggle_export'>"
+            html += f"<input type='hidden' name='directory' value='{d['directory']}'>"
+            html += f"<input type='hidden' name='is_exported' value='{'' if d['is_exported'] else 'on'}'>"
+            html += f"<button type='submit'>Toggle</button>"
+            html += f"</form>"
+            html += f"</td></tr>"
+        html += "</table>"
+
+        html += "<h2>Hidden Files</h2>"
+        html += "<ul>"
+        for uri in sorted(hidden_files):
+            html += f"<li>{uri} "
+            html += f"<form style='display:inline;' method='POST'>"
+            html += f"<input type='hidden' name='action' value='undelete'>"
+            html += f"<input type='hidden' name='uri' value='{uri}'>"
+            html += f"<button type='submit'>Undelete</button>"
+            html += f"</form></li>"
+        if not hidden_files:
+            html += "<li>No hidden files.</li>"
+        html += "</ul>"
+        html += "</body></html>"
+
+        return web.Response(text=html, content_type='text/html')
+
     async def handle_http_request(request):
+        ip = request.remote
+        user_id = rtmp_handler.sessions.get(ip)
+
+        # Skip IP check only for dashboard and admin? No, we need user context for both dashboard and general endpoints
+        if not user_id:
+            logger.warning(f"Unauthorized HTTP request to {request.path} from IP: {ip}")
+            raise web.HTTPForbidden()
+
+        allowed_dirs = db.get_allowed_directories(user_id)
+        hidden_files = db.get_hidden_files(user_id)
+
         req_path = request.path
         rel_path = req_path.lstrip('/')
         if rel_path.startswith('DCIM/'):
@@ -436,12 +654,17 @@ async def main():
 
                 merged_items = {}
                 for top_level in os.listdir(args.dir):
+                    if top_level not in allowed_dirs:
+                        continue
                     top_level_path = os.path.join(args.dir, top_level)
                     if os.path.isdir(top_level_path):
                         camera01_path = os.path.join(top_level_path, "Camera01")
                         if os.path.isdir(camera01_path):
                             for item in os.listdir(camera01_path):
                                 if item.startswith('.'):
+                                    continue
+                                uri = f"/DCIM/Camera01/{item}"
+                                if not os.path.isdir(os.path.join(camera01_path, item)) and uri in hidden_files:
                                     continue
                                 item_path = os.path.join(camera01_path, item)
                                 merged_items[item] = os.path.isdir(item_path)
@@ -453,7 +676,7 @@ async def main():
                     # Actually get file size if it's not a directory?
                     if not is_dir:
                         # Find the first one to get size
-                        for top_level in os.listdir(args.dir):
+                        for top_level in allowed_dirs:
                             cand = os.path.join(args.dir, top_level, "Camera01", item)
                             if os.path.isfile(cand):
                                 size_str = str(os.path.getsize(cand))
@@ -466,7 +689,7 @@ async def main():
 
             else:
                 # Find the file or sub-directory in one of the top-level directories
-                for top_level in os.listdir(args.dir):
+                for top_level in allowed_dirs:
                     top_level_path = os.path.join(args.dir, top_level)
                     if os.path.isdir(top_level_path):
                         candidate = os.path.join(top_level_path, "Camera01", sub_path)
@@ -478,6 +701,13 @@ async def main():
                                 for item in sorted(os.listdir(candidate)):
                                     if item.startswith('.'):
                                         continue
+
+                                    # Form relative URI from Camera01
+                                    rel_uri_path = os.path.relpath(os.path.join(candidate, item), os.path.join(top_level_path, "Camera01"))
+                                    uri = f"/DCIM/Camera01/{rel_uri_path}"
+                                    if uri in hidden_files:
+                                        continue
+
                                     item_path = os.path.join(candidate, item)
                                     is_dir = os.path.isdir(item_path)
                                     size_str = "directory" if is_dir else str(os.path.getsize(item_path))
@@ -486,6 +716,11 @@ async def main():
                                 html += "</tbody></table></body></html>"
                                 return web.Response(text=html, content_type='text/html')
                             else:
+                                # We check if the exact file being requested is hidden
+                                rel_uri_path = os.path.relpath(candidate, os.path.join(top_level_path, "Camera01"))
+                                uri = f"/DCIM/Camera01/{rel_uri_path}"
+                                if uri in hidden_files:
+                                    continue
                                 return web.FileResponse(candidate)
 
         raise web.HTTPNotFound()
@@ -494,16 +729,21 @@ async def main():
     if args.http:
         # Start HTTP server
         app = web.Application(middlewares=[logging_middleware])
+        app.router.add_route('GET', '/dashboard', handle_dashboard)
+        app.router.add_route('POST', '/dashboard', handle_dashboard)
+        app.router.add_route('GET', '/admin', handle_admin)
+        app.router.add_route('POST', '/admin', handle_admin)
         app.router.add_route('GET', '/{tail:.*}', handle_http_request)
         runner = web.AppRunner(app)
         await runner.setup()
-        http_site = web.TCPSite(runner, args.bind, 80)
+        http_port = 8080 if args.bind == "127.0.0.1" else 80
+        http_site = web.TCPSite(runner, args.bind, http_port)
 
         try:
             await http_site.start()
-            logger.info(f"HTTP Server started on {args.bind}:80")
+            logger.info(f"HTTP Server started on {args.bind}:{http_port}")
         except Exception as e:
-            logger.error(f"Failed to start HTTP server on port 80: {e}")
+            logger.error(f"Failed to start HTTP server on port {http_port}: {e}")
 
     try:
         # Keep the process alive
