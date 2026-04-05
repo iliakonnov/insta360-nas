@@ -331,10 +331,10 @@ async def handle_client(reader, writer, rtmp_handler):
     logger.info(f"Accepted connection from {peername}")
 
     # Send SYNC packet with length prefix
-    sync_packet = bytearray(struct.pack("<i", len(PKT_SYNC) + 4))
-    sync_packet.extend(PKT_SYNC)
-    writer.write(sync_packet)
-    await writer.drain()
+    #sync_packet = bytearray(struct.pack("<i", len(PKT_SYNC) + 4))
+    #sync_packet.extend(PKT_SYNC)
+    #writer.write(sync_packet)
+    #await writer.drain()
 
     while True:
         try:
@@ -348,16 +348,21 @@ async def handle_client(reader, writer, rtmp_handler):
 
             pkt_data = await reader.readexactly(payload_len)
 
-            if pkt_data == PKT_SYNC:
-                continue
-            elif pkt_data == PKT_KEEPALIVE:
-                # Echo keepalive? Wait, server doesn't have to echo keepalive, but can if needed.
-                continue
-
-            response_pkt = rtmp_handler.handle_packet(pkt_data)
-            if response_pkt:
-                writer.write(response_pkt)
+            if pkt_data[:3] == b'\x06\x00\x00':
+                logger.debug('Received sync')
+                writer.write(len_bytes + pkt_data)
                 await writer.drain()
+                continue
+            elif pkt_data[:3] == b'\x05\x00\x00':
+                logger.debug('Received keepalive')
+                continue
+            elif pkt_data[:3] == b'\x04\00\00':
+                response_pkt = rtmp_handler.handle_packet(pkt_data)
+                if response_pkt:
+                    writer.write(response_pkt)
+                    await writer.drain()
+            else:
+                logger.warning(f'Unknown packet type: {pkt_data[:3]}')
 
         except asyncio.IncompleteReadError:
             logger.info(f"Client {peername} disconnected.")
