@@ -42,6 +42,7 @@
             aiohttp
             lib-one-proto
             protobuf
+            bless
           ];
 
           postPatch = ''
