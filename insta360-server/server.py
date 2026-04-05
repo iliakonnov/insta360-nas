@@ -183,7 +183,8 @@ class BLEHandler:
 
             # 2. Process and send actual response
             pkt_data = value[4:]
-            response = self.rtmp_handler.handle_packet(pkt_data)
+            client_id = f"BLE-{kwargs.get('device', 'unknown')}"
+            response = self.rtmp_handler.handle_packet(pkt_data, client_id=client_id)
             if response:
                 # Small delay to ensure ACK is processed first by the app
                 async def send_with_delay():
@@ -192,8 +193,10 @@ class BLEHandler:
                 asyncio.run_coroutine_threadsafe(send_with_delay(), loop)
 
 class RTMPHandler:
-    def __init__(self, media_dir):
+    def __init__(self, media_dir, authorized_ids=None):
         self.media_dir = media_dir
+        self.authorized_ids = authorized_ids if authorized_ids else []
+        self.sessions = {} # Mapping client_id -> authorized_id
 
     def _pack_response(self, code, seq, pb_msg):
         pb_bytes = pb_msg.SerializeToString()
@@ -209,7 +212,7 @@ class RTMPHandler:
         pkt_data.extend(payload)
         return bytes(pkt_data)
 
-    def handle_packet(self, pkt_data):
+    def handle_packet(self, pkt_data, client_id=None):
         try:
             if len(pkt_data) < 12:
                 return None
@@ -220,7 +223,7 @@ class RTMPHandler:
             msg_code = struct.unpack("<H", pkt_data[3:5])[0]
             seq = struct.unpack("<I", pkt_data[6:9] + b"\x00")[0]
 
-            logger.info(f"RTMP Request Received - msg_code: {msg_code}, seq: {seq}, payload_size: {len(body)}")
+            logger.info(f"RTMP Request Received - msg_code: {msg_code}, seq: {seq}, payload_size: {len(body)}, client: {client_id}")
 
             if msg_code not in pb_resp_classes:
                 logger.warning(f"RTMP Request Unknown message code: {msg_code}. Sending empty OK response.")
@@ -305,17 +308,19 @@ class RTMPHandler:
                                     resp_msg.uri.append(uri)
                 resp_msg.total_count = len(resp_msg.uri)
             elif msg_code == PHONE_COMMAND_CHECK_AUTHORIZATION:
-                logger.info(f"RTMP Response Sent - msg_code: {msg_code}, seq: {seq}, response: manually packed 08 00")
-                pb_bytes = b"\x08\x00"
-                header = b"\x04\x00\x00"
-                header += struct.pack("<H", RESPONSE_CODE_OK)
-                header += b"\x02"
-                header += struct.pack("<i", seq)[0:3]
-                header += b"\x80\x00\x00"
-                payload = header + pb_bytes
-                pkt_data = bytearray(struct.pack("<i", len(payload) + 4))
-                pkt_data.extend(payload)
-                return bytes(pkt_data)
+                req_msg = check_authorization_pb2.CheckAuthorization()
+                req_msg.ParseFromString(body)
+                logger.info(f"CheckAuthorization request: {req_msg}")
+
+                resp_msg = check_authorization_pb2.CheckAuthorizationResp()
+                if not self.authorized_ids or req_msg.id in self.authorized_ids:
+                    logger.info(f"Authorization successful for ID: {req_msg.id}")
+                    if client_id:
+                        self.sessions[client_id] = req_msg.id
+                    resp_msg.authorization_status = check_authorization_pb2.CheckAuthorizationResp.AUTHORIZED
+                else:
+                    logger.warning(f"Authorization failed for ID: {req_msg.id}")
+                    resp_msg.authorization_status = check_authorization_pb2.CheckAuthorizationResp.UNAUTHORIZED
             else:
                 RespClass = pb_resp_classes[msg_code]
                 resp_msg = RespClass()
@@ -357,7 +362,7 @@ async def handle_client(reader, writer, rtmp_handler):
                 logger.debug('Received keepalive')
                 continue
             elif pkt_data[:3] == b'\x04\00\00':
-                response_pkt = rtmp_handler.handle_packet(pkt_data)
+                response_pkt = rtmp_handler.handle_packet(pkt_data, client_id=str(peername))
                 if response_pkt:
                     writer.write(response_pkt)
                     await writer.drain()
@@ -384,9 +389,10 @@ async def main():
     parser.add_argument("--no-http", action="store_false", dest="http")
     parser.add_argument("--rtsp", action="store_true", default=True, help="Start RTSP server on port 6666")
     parser.add_argument("--no-rtsp", action="store_false", dest="rtsp")
+    parser.add_argument("--auth-id", action="append", help="Authorized ID(s)")
     args = parser.parse_args()
 
-    rtmp_handler = RTMPHandler(args.dir)
+    rtmp_handler = RTMPHandler(args.dir, authorized_ids=args.auth_id)
     tasks = []
 
     if args.ble:
