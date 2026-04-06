@@ -331,8 +331,9 @@ class RTMPHandler:
                                         continue
                                     full_path = os.path.join(root, file)
                                     rel_path = os.path.relpath(full_path, camera01_path)
+                                    long_path = os.path.join(top_level, "Camera01", rel_path)
                                     uri = f"/DCIM/Camera01/{rel_path}"
-                                    if uri not in hidden_files:
+                                    if long_path not in hidden_files:
                                         resp_msg.uri.append(uri)
                 resp_msg.total_count = len(resp_msg.uri)
             elif msg_code == PHONE_COMMAND_DELETE_FILES:
@@ -349,8 +350,32 @@ class RTMPHandler:
                     # If unauthorized, we might mark them all as failed
                     resp_msg.fail_uri.extend(req_msg.uri)
                 else:
-                    self.db.hide_files(user_id, req_msg.uri)
-                    logger.info(f"Hid files for user {user_id}: {req_msg.uri}")
+                    allowed_dirs = self.db.get_exported_directories(user_id)
+                    files_to_hide = []
+
+                    for uri in req_msg.uri:
+                        # uri format: /DCIM/Camera01/filename.mp4
+                        if uri.startswith('/DCIM/Camera01/'):
+                            rel_path = uri[15:]
+                            matches = []
+                            for top_level in allowed_dirs:
+                                top_level_path = os.path.join(self.media_dir, top_level)
+                                candidate = os.path.join(top_level_path, "Camera01", rel_path)
+                                if os.path.exists(candidate):
+                                    matches.append(os.path.join(top_level, "Camera01", rel_path))
+
+                            if len(matches) == 1:
+                                files_to_hide.append(matches[0])
+                            else:
+                                # 0 matches (not found) or >1 matches (conflict)
+                                resp_msg.fail_uri.append(uri)
+                        else:
+                            # Not a Camera01 uri, fail it
+                            resp_msg.fail_uri.append(uri)
+
+                    if files_to_hide:
+                        self.db.hide_files(user_id, files_to_hide)
+                        logger.info(f"Hid files for user {user_id}: {files_to_hide}")
 
             elif msg_code == PHONE_COMMAND_CHECK_AUTHORIZATION:
                 req_msg = check_authorization_pb2.CheckAuthorization()

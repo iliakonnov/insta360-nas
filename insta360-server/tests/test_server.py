@@ -83,7 +83,7 @@ def test_rtmp_get_file_list_merging(mock_walk, mock_isdir, mock_listdir, rtmp_ha
 
     # Setup mocks
     mock_db.get_exported_directories.return_value = ["SDCard", "Internal"]
-    mock_db.get_hidden_files.return_value = set(["/DCIM/Camera01/hidden.mp4"])
+    mock_db.get_hidden_files.return_value = set(["SDCard/Camera01/hidden.mp4"])
 
     # Mock file system
     mock_listdir.return_value = ["SDCard", "Internal", "NotAllowed"]
