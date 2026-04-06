@@ -189,7 +189,7 @@ class BLEHandler:
 
             # 2. Process and send actual response
             pkt_data = value[4:]
-            client_id = f"BLE-{kwargs.get('device', 'unknown')}"
+            client_id = (f"BLE-{kwargs.get('device', 'unknown')}", 0)
             response = self.rtmp_handler.handle_packet(pkt_data, client_id=client_id)
             if response:
                 # Small delay to ensure ACK is processed first by the app
@@ -198,11 +198,16 @@ class BLEHandler:
                     await self.notify(response, "Response")
                 asyncio.run_coroutine_threadsafe(send_with_delay(), loop)
 
+from collections import defaultdict
+
 class RTMPHandler:
     def __init__(self, media_dir, db):
         self.media_dir = media_dir
         self.db = db
-        self.sessions = {} # Mapping client_id -> user_id
+        # Mapping ip -> user_id
+        self.sessions = {}
+        # Mapping ip -> count of active RTMP connections
+        self.session_counts = defaultdict(int)
 
     def _pack_response(self, code, seq, pb_msg):
         pb_bytes = pb_msg.SerializeToString()
@@ -217,18 +222,6 @@ class RTMPHandler:
         pkt_data = bytearray(struct.pack("<i", len(payload) + 4))
         pkt_data.extend(payload)
         return bytes(pkt_data)
-
-    def _get_ip_from_client_id(self, client_id):
-        ip = client_id
-        if isinstance(client_id, str) and client_id.startswith("('"):
-            try:
-                import ast
-                ip = ast.literal_eval(client_id)[0]
-            except Exception:
-                pass
-        elif isinstance(client_id, tuple):
-            ip = client_id[0]
-        return ip
 
     def handle_packet(self, pkt_data, client_id=None):
         try:
@@ -311,7 +304,7 @@ class RTMPHandler:
 
             elif msg_code == PHONE_COMMAND_GET_FILE_LIST:
                 resp_msg = get_file_list_pb2.GetFileListResp()
-                ip = self._get_ip_from_client_id(client_id)
+                ip = client_id[0] if isinstance(client_id, tuple) else client_id
                 user_id = self.sessions.get(ip)
                 if not user_id:
                     logger.warning(f"Unauthorized GET_FILE_LIST from IP: {ip}")
@@ -345,7 +338,7 @@ class RTMPHandler:
 
                 resp_msg = delete_files_pb2.DeleteFilesResp()
 
-                ip = self._get_ip_from_client_id(client_id)
+                ip = client_id[0] if isinstance(client_id, tuple) else client_id
                 user_id = self.sessions.get(ip)
                 if not user_id:
                     logger.warning(f"Unauthorized DELETE_FILES from IP: {ip}")
@@ -363,11 +356,12 @@ class RTMPHandler:
                 user = self.db.get_or_create_user(req_msg.id)
                 resp_msg = check_authorization_pb2.CheckAuthorizationResp()
 
-                if user["authorized"]:
+                if user.authorized:
                     logger.info(f"Authorization successful for ID: {req_msg.id}")
                     if client_id:
-                        ip = self._get_ip_from_client_id(client_id)
+                        ip = client_id[0] if isinstance(client_id, tuple) else client_id
                         self.sessions[ip] = req_msg.id
+                        # The count will be maintained at connection level, but we ensure mapping exists
                         logger.info(f"Associated IP {ip} with User {req_msg.id}")
                     resp_msg.authorization_status = check_authorization_pb2.CheckAuthorizationResp.AUTHORIZED
                 else:
@@ -386,6 +380,10 @@ class RTMPHandler:
 async def handle_client(reader, writer, rtmp_handler):
     peername = writer.get_extra_info('peername')
     logger.info(f"Accepted connection from {peername}")
+
+    if peername and isinstance(peername, tuple):
+        ip = peername[0]
+        rtmp_handler.session_counts[ip] += 1
 
     # Send SYNC packet with length prefix
     #sync_packet = bytearray(struct.pack("<i", len(PKT_SYNC) + 4))
@@ -414,7 +412,7 @@ async def handle_client(reader, writer, rtmp_handler):
                 logger.debug('Received keepalive')
                 continue
             elif pkt_data[:3] == b'\x04\00\00':
-                response_pkt = rtmp_handler.handle_packet(pkt_data, client_id=str(peername))
+                response_pkt = rtmp_handler.handle_packet(pkt_data, client_id=peername)
                 if response_pkt:
                     writer.write(response_pkt)
                     await writer.drain()
@@ -431,8 +429,13 @@ async def handle_client(reader, writer, rtmp_handler):
     if peername and isinstance(peername, tuple):
         ip = peername[0]
         if ip in rtmp_handler.sessions:
-            logger.info(f"Removing active session for disconnected client IP {ip}")
-            del rtmp_handler.sessions[ip]
+            rtmp_handler.session_counts[ip] -= 1
+            if rtmp_handler.session_counts[ip] <= 0:
+                logger.info(f"Removing active session for disconnected client IP {ip} (no connections left)")
+                del rtmp_handler.sessions[ip]
+                del rtmp_handler.session_counts[ip]
+            else:
+                logger.info(f"Client IP {ip} disconnected but {rtmp_handler.session_counts[ip]} connections remain.")
 
     writer.close()
     await writer.wait_closed()
@@ -441,6 +444,7 @@ async def main():
     parser = argparse.ArgumentParser(description="Insta360 RTMP/HTTP/BLE Server")
     parser.add_argument("--bind", default="0.0.0.0", help="IP address to bind to")
     parser.add_argument("--dir", required=True, help="Directory to serve files from")
+    parser.add_argument("--db-dir", help="Directory to store the insta360.db file")
     parser.add_argument("--ble", action="store_true", default=True, help="Start BLE server")
     parser.add_argument("--no-ble", action="store_false", dest="ble")
     parser.add_argument("--http", action="store_true", default=True, help="Start HTTP server")
@@ -449,7 +453,8 @@ async def main():
     parser.add_argument("--no-rtsp", action="store_false", dest="rtsp")
     args = parser.parse_args()
 
-    db = Database(os.path.join(args.dir, "insta360.db"))
+    db_dir = args.db_dir if args.db_dir else args.dir
+    db = Database(os.path.join(db_dir, "insta360.db"))
     rtmp_handler = RTMPHandler(args.dir, db)
     tasks = []
 

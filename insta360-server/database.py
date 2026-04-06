@@ -18,7 +18,7 @@ NOUNS = [
 ]
 
 from dataclasses import dataclass
-from typing import List, Optional, Set
+from typing import Optional
 
 @dataclass
 class User:
@@ -124,7 +124,7 @@ class Database:
                 return User(id=row[0], name=row[1], is_admin=bool(row[2]), authorized=bool(row[3]))
             return None
 
-    def get_all_users(self) -> List[User]:
+    def get_all_users(self) -> list[User]:
         with self._get_conn() as conn:
             c = conn.cursor()
             c.execute("SELECT id, name, is_admin, authorized FROM users")
@@ -140,7 +140,7 @@ class Database:
             conn.commit()
 
     # --- Directory Access Control ---
-    def get_user_directories(self, user_id: str) -> List[UserDirectory]:
+    def get_user_directories(self, user_id: str) -> list[UserDirectory]:
         with self._get_conn() as conn:
             c = conn.cursor()
             c.execute("SELECT directory, access_granted, is_exported FROM user_directories WHERE user_id = ?", (user_id,))
@@ -149,7 +149,7 @@ class Database:
                 for row in c.fetchall()
             ]
 
-    def get_exported_directories(self, user_id: str) -> List[str]:
+    def get_exported_directories(self, user_id: str) -> list[str]:
         """Returns list of directories that user has access to AND are exported (visible)"""
         with self._get_conn() as conn:
             c = conn.cursor()
@@ -175,19 +175,19 @@ class Database:
             conn.commit()
 
     # --- Hidden Files ---
-    def get_hidden_files(self, user_id: str) -> Set[str]:
+    def get_hidden_files(self, user_id: str) -> set[str]:
         with self._get_conn() as conn:
             c = conn.cursor()
             c.execute("SELECT file_uri FROM hidden_files WHERE user_id = ?", (user_id,))
             return set(row[0] for row in c.fetchall())
 
-    def get_hidden_files_ordered(self, user_id: str) -> List[str]:
+    def get_hidden_files_ordered(self, user_id: str) -> list[str]:
         with self._get_conn() as conn:
             c = conn.cursor()
             c.execute("SELECT file_uri FROM hidden_files WHERE user_id = ? ORDER BY deleted_at DESC", (user_id,))
             return [row[0] for row in c.fetchall()]
 
-    def hide_files(self, user_id: str, uris: List[str]) -> None:
+    def hide_files(self, user_id: str, uris: list[str]) -> None:
         with self._get_conn() as conn:
             c = conn.cursor()
             for uri in uris:

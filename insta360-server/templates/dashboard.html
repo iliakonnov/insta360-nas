@@ -7,15 +7,14 @@
     {% for d in directories %}
     <tr>
         <td>{{ d.directory }}</td>
-        <td><input type='checkbox' name='is_exported' {{ "checked" if d.is_exported else "" }} disabled> {{ d.is_exported }}</td>
         <td>
             <form style='display:inline;' method='POST'>
                 <input type='hidden' name='action' value='toggle_export'>
                 <input type='hidden' name='directory' value='{{ d.directory }}'>
-                <input type='hidden' name='is_exported' value='{{ "" if d.is_exported else "on" }}'>
-                <button type='submit'>Toggle</button>
+                <input type='checkbox' name='is_exported' value='on' {{ 'checked' if d.is_exported else '' }} onchange='this.form.submit()'>
             </form>
         </td>
+        <td>Toggle Exported Status</td>
     </tr>
     {% endfor %}
 </table>
