@@ -7,13 +7,6 @@ from aiohttp import web
 import jinja2
 import aiohttp_jinja2
 
-from bless import (
-    BlessServer,
-    BlessGATTCharacteristic,
-    GATTCharacteristicProperties,
-    GATTAttributePermissions
-)
-
 # BLE Constants
 SERVICE_UUID = "0000be80-0000-1000-8000-00805f9b34fb"
 CHAR_BE81 = "0000be81-0000-1000-8000-00805f9b34fb"  # Write (From iPad)
@@ -128,6 +121,11 @@ class BLEHandler:
             self.server.update_value(SERVICE_UUID, CHAR_BE82)
 
     async def start(self):
+        from bless import (
+            BlessServer,
+            GATTCharacteristicProperties,
+            GATTAttributePermissions
+        )
         self.server = BlessServer(name=DEVICE_NAME)
         self.server.read_request_func = self.on_read
         self.server.write_request_func = self.on_write
@@ -172,11 +170,11 @@ class BLEHandler:
             await self.server.stop()
             logger.info("BLE server stopped")
 
-    def on_read(self, characteristic: BlessGATTCharacteristic, **kwargs) -> bytearray:
+    def on_read(self, characteristic, **kwargs) -> bytearray:
         logger.info(f"[BLE] Read request on {characteristic.uuid}")
         return characteristic.value
 
-    def on_write(self, characteristic: BlessGATTCharacteristic, value: bytearray, **kwargs):
+    def on_write(self, characteristic, value: bytearray, **kwargs):
         logger.info(f"[BLE] Write request on {characteristic.uuid}: {value.hex()}")
         characteristic.value = value
         if str(characteristic.uuid).lower() == CHAR_BE81.lower():
@@ -449,8 +447,7 @@ async def main():
     parser.add_argument("--bind", default="0.0.0.0", help="IP address to bind to")
     parser.add_argument("--dir", required=True, help="Directory to serve files from")
     parser.add_argument("--db-dir", help="Directory to store the insta360.db file")
-    parser.add_argument("--ble", action="store_true", default=True, help="Start BLE server")
-    parser.add_argument("--no-ble", action="store_false", dest="ble")
+    parser.add_argument("--ble", action="store_true", default=False, help="Start BLE server")
     parser.add_argument("--http", action="store_true", default=True, help="Start HTTP server")
     parser.add_argument("--no-http", action="store_false", dest="http")
     parser.add_argument("--rtsp", action="store_true", default=True, help="Start RTSP server on port 6666")

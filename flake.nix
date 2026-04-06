@@ -64,6 +64,9 @@ setup(
             'insta360-server=server:main_entry',
         ],
     },
+    extras_require={
+        'ble': ['bless'],
+    },
 )
 SETUP_EOF
           '';
