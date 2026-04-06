@@ -43,6 +43,13 @@
             lib-one-proto
             protobuf
             bless
+            aiohttp-jinja2
+            jinja2
+          ];
+
+          nativeCheckInputs = with pkgs.python3Packages; [
+            pytestCheckHook
+            pytest-asyncio
           ];
 
           postPatch = ''
@@ -51,7 +58,7 @@ from setuptools import setup
 setup(
     name='insta360-server',
     version='0.1.0',
-    py_modules=['server'],
+    py_modules=['server', 'database'],
     entry_points={
         'console_scripts': [
             'insta360-server=server:main_entry',
@@ -60,6 +67,10 @@ setup(
 )
 SETUP_EOF
           '';
+
+          # Since the source is just the root of insta360-server,
+          # pytest will discover the tests folder inside it
+          pytestFlagsArray = [ "tests/" ];
         };
       }
     );
