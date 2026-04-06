@@ -12,7 +12,7 @@ SERVICE_UUID = "0000be80-0000-1000-8000-00805f9b34fb"
 CHAR_BE81 = "0000be81-0000-1000-8000-00805f9b34fb"  # Write (From iPad)
 CHAR_BE82 = "0000be82-0000-1000-8000-00805f9b34fb"  # Notify (To iPad)
 CHAR_BE83 = "0000be83-0000-1000-8000-00805f9b34fb"  # Read
-DEVICE_NAME = "X5 1RM6GY"
+DEVICE_NAME = "X5 1RM6"
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -99,6 +99,7 @@ class BLEHandler:
         self.heartbeat_task = None
         self.ready_ack = bytes.fromhex("10000000040000172002ff8a43f40000")
         self.heartbeat_payload = bytes.fromhex("07000000050000")
+        self.loop = asyncio.get_running_loop()
 
     async def _heartbeat_loop(self):
         """Sends the periodic heartbeat and initial ready signal."""
@@ -145,7 +146,7 @@ class BLEHandler:
         await self.server.add_new_characteristic(
             SERVICE_UUID, CHAR_BE82,
             (GATTCharacteristicProperties.notify | GATTCharacteristicProperties.read),
-            bytearray(self.heartbeat_payload),
+            None,
             GATTAttributePermissions.readable
         )
 
@@ -182,13 +183,13 @@ class BLEHandler:
                 return
             
             # 1. Send ACK first (matching real camera behavior)
-            loop = asyncio.get_running_loop()
+            loop = self.loop
             asyncio.run_coroutine_threadsafe(self.notify(self.ready_ack, "ACK"), loop)
 
             # 2. Process and send actual response
             pkt_data = value[4:]
             client_id = (f"BLE-{kwargs.get('device', 'unknown')}", 0)
-            response = self.rtmp_handler.handle_packet(pkt_data, client_id=client_id)
+            response = self.rtmp_handler.handle_packet(bytes(pkt_data), client_id=client_id)
             if response:
                 # Small delay to ensure ACK is processed first by the app
                 async def send_with_delay():
@@ -280,8 +281,8 @@ class RTMPHandler:
                 
                 # Network & Connectivity
                 if get_options_pb2.WIFI_INFO in req_opts:
-                    resp_msg.value.wifi_info.ssid = "X5 1RM6GY.OSC"
-                    resp_msg.value.wifi_info.password = "884QS5VH"
+                    resp_msg.value.wifi_info.ssid = "X5 1RM6GZ.OSC"
+                    resp_msg.value.wifi_info.password = "L:ZpN8y}4)9kRW8"
                     resp_msg.value.wifi_info.channel = 6
                     resp_msg.value.wifi_info.mode = resp_msg.value.wifi_info.Mode.AP
                     resp_msg.value.wifi_info.wifi_state = resp_msg.value.wifi_info.WifiState.ON
