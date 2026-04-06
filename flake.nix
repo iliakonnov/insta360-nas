@@ -68,6 +68,10 @@ setup(
 SETUP_EOF
           '';
 
+          postInstall = ''
+            cp -r templates $out/${python.sitePackages}/templates
+          '';
+
           # Since the source is just the root of insta360-server,
           # pytest will discover the tests folder inside it
           pytestFlagsArray = [ "tests/" ];
