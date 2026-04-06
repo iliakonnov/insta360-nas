@@ -146,10 +146,10 @@ SETUP_EOF
             serviceConfig = {
               ExecStart = ''
                 ${cfg.package}/bin/insta360-server \
-                  --bind=${cfg.bind} \
-                  --dir=${cfg.dir} \
-                  --db-dir=${cfg.dbDir} \
-                  --config-file=${cfg.configFile} \
+                  --bind "${cfg.bind}" \
+                  --dir "${cfg.dir}" \
+                  --db-dir "${cfg.dbDir}" \
+                  --config-file "${cfg.configFile}" \
                   ${if cfg.http then "--http" else "--no-http"} \
                   ${if cfg.rtsp then "--rtsp" else "--no-rtsp"} \
                   ${if cfg.ble then "--ble" else ""}
