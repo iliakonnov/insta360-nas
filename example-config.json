@@ -1,0 +1,9 @@
+{
+  "device_name": "Insta360 Example",
+  "camera_type": "Insta360 X5",
+  "firmware_revision": "v1.0.0",
+  "serial_number": "EXAMP123456789",
+  "ota_pkg_version": "v1.0.0",
+  "wifi_ssid": "Insta360_Example_OSC",
+  "wifi_password": "ExamplePassword123"
+}

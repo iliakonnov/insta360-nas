@@ -81,5 +81,86 @@ SETUP_EOF
         };
       }
     );
+
+    nixosModules.default = { config, lib, pkgs, ... }:
+      let
+        cfg = config.services.insta360-nas;
+      in {
+        options.services.insta360-nas = {
+          enable = lib.mkEnableOption "Insta360 NAS server";
+
+          package = lib.mkOption {
+            type = lib.types.package;
+            default = self.packages.${pkgs.system}.default;
+            description = "The insta360-server package to use.";
+          };
+
+          bind = lib.mkOption {
+            type = lib.types.str;
+            default = "192.168.42.1";
+            description = "IP address to bind the server to.";
+          };
+
+          dir = lib.mkOption {
+            type = lib.types.str;
+            default = "/data/@storage/Photos";
+            description = "Directory to serve files from.";
+          };
+
+          dbDir = lib.mkOption {
+            type = lib.types.str;
+            default = "$STATE_DIRECTORY";
+            description = "Directory to store the insta360.db file.";
+          };
+
+          configFile = lib.mkOption {
+            type = lib.types.str;
+            default = "/var/lib/insta360-nas/config.json";
+            description = "Path to the JSON configuration file containing secrets.";
+          };
+
+          http = lib.mkOption {
+            type = lib.types.bool;
+            default = true;
+            description = "Start HTTP server.";
+          };
+
+          rtsp = lib.mkOption {
+            type = lib.types.bool;
+            default = true;
+            description = "Start RTSP server.";
+          };
+
+          ble = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Start BLE server.";
+          };
+        };
+
+        config = lib.mkIf cfg.enable {
+          systemd.services.insta360-nas = {
+            description = "Insta360 RTMP and HTTP Server";
+            after = [ "network.target" ];
+            wantedBy = [ "multi-user.target" ];
+            serviceConfig = {
+              ExecStart = ''
+                ${cfg.package}/bin/insta360-server \
+                  --bind=${cfg.bind} \
+                  --dir=${cfg.dir} \
+                  --db-dir=${cfg.dbDir} \
+                  --config-file=${cfg.configFile} \
+                  ${if cfg.http then "--http" else "--no-http"} \
+                  ${if cfg.rtsp then "--rtsp" else "--no-rtsp"} \
+                  ${if cfg.ble then "--ble" else ""}
+              '';
+              StateDirectory = "insta360-nas";
+              Restart = "always";
+              AmbientCapabilities = [ "CAP_NET_BIND_SERVICE" ];
+              DynamicUser = true;
+            };
+          };
+        };
+      };
   };
 }
