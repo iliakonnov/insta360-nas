@@ -223,6 +223,10 @@ class RTMPHandler:
         pkt_data.extend(payload)
         return bytes(pkt_data)
 
+    def _get_ip_from_client_id(self, client_id):
+        # client_id is always a tuple (ip, port)
+        return client_id[0]
+
     def handle_packet(self, pkt_data, client_id=None):
         try:
             if len(pkt_data) < 12:
@@ -304,7 +308,7 @@ class RTMPHandler:
 
             elif msg_code == PHONE_COMMAND_GET_FILE_LIST:
                 resp_msg = get_file_list_pb2.GetFileListResp()
-                ip = client_id[0] if isinstance(client_id, tuple) else client_id
+                ip = self._get_ip_from_client_id(client_id)
                 user_id = self.sessions.get(ip)
                 if not user_id:
                     logger.warning(f"Unauthorized GET_FILE_LIST from IP: {ip}")
@@ -338,7 +342,7 @@ class RTMPHandler:
 
                 resp_msg = delete_files_pb2.DeleteFilesResp()
 
-                ip = client_id[0] if isinstance(client_id, tuple) else client_id
+                ip = self._get_ip_from_client_id(client_id)
                 user_id = self.sessions.get(ip)
                 if not user_id:
                     logger.warning(f"Unauthorized DELETE_FILES from IP: {ip}")
@@ -359,7 +363,7 @@ class RTMPHandler:
                 if user.authorized:
                     logger.info(f"Authorization successful for ID: {req_msg.id}")
                     if client_id:
-                        ip = client_id[0] if isinstance(client_id, tuple) else client_id
+                        ip = self._get_ip_from_client_id(client_id)
                         self.sessions[ip] = req_msg.id
                         # The count will be maintained at connection level, but we ensure mapping exists
                         logger.info(f"Associated IP {ip} with User {req_msg.id}")
