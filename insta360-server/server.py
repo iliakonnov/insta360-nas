@@ -314,7 +314,7 @@ class RTMPHandler:
                     logger.warning(f"Unauthorized GET_FILE_LIST from IP: {ip}")
                     return self._pack_response(msg_code, seq, resp_msg)
 
-                allowed_dirs = self.db.get_allowed_directories(user_id)
+                allowed_dirs = self.db.get_exported_directories(user_id)
                 hidden_files = self.db.get_hidden_files(user_id)
 
                 for top_level in os.listdir(self.media_dir):
