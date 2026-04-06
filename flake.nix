@@ -69,7 +69,7 @@ SETUP_EOF
           '';
 
           postInstall = ''
-            cp -r templates $out/${python.sitePackages}/templates
+            cp -r templates $out/${pkgs.python3.sitePackages}/templates
           '';
 
           # Since the source is just the root of insta360-server,
