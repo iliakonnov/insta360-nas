@@ -356,7 +356,7 @@ class RTMPHandler:
                     for uri in req_msg.uri:
                         # uri format: /DCIM/Camera01/filename.mp4
                         if uri.startswith('/DCIM/Camera01/'):
-                            rel_path = uri[15:]
+                            rel_path = uri.removeprefix('/DCIM/Camera01/')
                             matches = []
                             for top_level in allowed_dirs:
                                 top_level_path = os.path.join(self.media_dir, top_level)
