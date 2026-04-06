@@ -97,7 +97,7 @@ def test_admin_shows_admin_status(env):
     html = env.get_template("admin.html").render(
         users=users, top_levels=[], u_access={"u1": set()}
     )
-    assert "Yes" in html
+    assert "Admin" in html
 
 
 def test_admin_shows_non_admin_status(env):
@@ -105,7 +105,7 @@ def test_admin_shows_non_admin_status(env):
     html = env.get_template("admin.html").render(
         users=users, top_levels=[], u_access={"u2": set()}
     )
-    assert "No" in html
+    assert "User" in html
 
 
 def test_admin_authorized_checkbox_checked(env):
