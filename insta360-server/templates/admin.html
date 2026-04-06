@@ -1,0 +1,44 @@
+<html><body>
+<h1>Admin Panel</h1>
+<h2>Users</h2>
+<table border='1'>
+    <tr>
+        <th>ID</th>
+        <th>Name</th>
+        <th>Admin</th>
+        <th>Authorized</th>
+        <th>Directory Access</th>
+    </tr>
+    {% for u in users %}
+    <tr>
+        <td>{{ u.id }}</td>
+        <td>{{ u.name }}</td>
+        <td>{{ "Yes" if u.is_admin else "No" }}</td>
+        <td>
+            <form style='display:inline;' method='POST'>
+                <input type='hidden' name='action' value='toggle_authorize'>
+                <input type='hidden' name='user_id' value='{{ u.id }}'>
+                <label>
+                    <input type='checkbox' name='authorized' value='on' {{ 'checked' if u.authorized else '' }} onchange='this.form.submit()'>
+                    Authorized
+                </label>
+            </form>
+        </td>
+        <td>
+            {% for d in top_levels %}
+            {% set has_access = d in u_access[u.id] %}
+            <form style='display:inline; margin-right: 10px;' method='POST'>
+                <input type='hidden' name='action' value='toggle_access'>
+                <input type='hidden' name='user_id' value='{{ u.id }}'>
+                <input type='hidden' name='directory' value='{{ d }}'>
+                <label>
+                    <input type='checkbox' name='access_granted' value='on' {{ 'checked' if has_access else '' }} onchange='this.form.submit()'>
+                    {{ d }}
+                </label>
+            </form>
+            {% endfor %}
+        </td>
+    </tr>
+    {% endfor %}
+</table>
+</body></html>

@@ -4,6 +4,8 @@ import os
 import struct
 import logging
 from aiohttp import web
+import jinja2
+import aiohttp_jinja2
 
 from bless import (
     BlessServer,
@@ -39,7 +41,9 @@ from lib_one_proto import (
     get_current_capture_status_pb2,
     check_authorization_pb2,
     wifi_mode_pb2,
+    delete_files_pb2,
 )
+from database import Database
 
 PKT_SYNC = b"\x06\x00\x00syNceNdinS"
 PKT_KEEPALIVE = b"\x05\x00\x00"
@@ -55,6 +59,7 @@ PHONE_COMMAND_GET_OPTIONS = 8
 PHONE_COMMAND_SET_PHOTOGRAPHY_OPTIONS = 9
 PHONE_COMMAND_GET_PHOTOGRAPHY_OPTIONS = 10
 PHONE_COMMAND_GET_FILE_LIST = 13
+PHONE_COMMAND_DELETE_FILES = 12
 PHONE_COMMAND_GET_CURRENT_CAPTURE_STATUS = 15
 PHONE_COMMAND_CHECK_AUTHORIZATION = 39
 PHONE_COMMAND_RESET_WIFI = 125
@@ -91,6 +96,7 @@ pb_resp_classes = {
     PHONE_COMMAND_STOP_LIVE_STREAM: stop_live_stream_pb2.StopLiveStreamResp,
     PHONE_COMMAND_GET_CURRENT_CAPTURE_STATUS: get_current_capture_status_pb2.GetCurrentCaptureStatusResp,
     PHONE_COMMAND_CHECK_AUTHORIZATION: check_authorization_pb2.CheckAuthorizationResp,
+    PHONE_COMMAND_DELETE_FILES: delete_files_pb2.DeleteFilesResp,
 }
 
 class BLEHandler:
@@ -183,7 +189,7 @@ class BLEHandler:
 
             # 2. Process and send actual response
             pkt_data = value[4:]
-            client_id = f"BLE-{kwargs.get('device', 'unknown')}"
+            client_id = (f"BLE-{kwargs.get('device', 'unknown')}", 0)
             response = self.rtmp_handler.handle_packet(pkt_data, client_id=client_id)
             if response:
                 # Small delay to ensure ACK is processed first by the app
@@ -192,11 +198,16 @@ class BLEHandler:
                     await self.notify(response, "Response")
                 asyncio.run_coroutine_threadsafe(send_with_delay(), loop)
 
+from collections import defaultdict
+
 class RTMPHandler:
-    def __init__(self, media_dir, authorized_ids=None):
+    def __init__(self, media_dir, db):
         self.media_dir = media_dir
-        self.authorized_ids = authorized_ids if authorized_ids else []
-        self.sessions = {} # Mapping client_id -> authorized_id
+        self.db = db
+        # Mapping ip -> user_id
+        self.sessions = {}
+        # Mapping ip -> count of active RTMP connections
+        self.session_counts = defaultdict(int)
 
     def _pack_response(self, code, seq, pb_msg):
         pb_bytes = pb_msg.SerializeToString()
@@ -211,6 +222,10 @@ class RTMPHandler:
         pkt_data = bytearray(struct.pack("<i", len(payload) + 4))
         pkt_data.extend(payload)
         return bytes(pkt_data)
+
+    def _get_ip_from_client_id(self, client_id):
+        # client_id is always a tuple (ip, port)
+        return client_id[0]
 
     def handle_packet(self, pkt_data, client_id=None):
         try:
@@ -293,7 +308,19 @@ class RTMPHandler:
 
             elif msg_code == PHONE_COMMAND_GET_FILE_LIST:
                 resp_msg = get_file_list_pb2.GetFileListResp()
+                ip = self._get_ip_from_client_id(client_id)
+                user_id = self.sessions.get(ip)
+                if not user_id:
+                    logger.warning(f"Unauthorized GET_FILE_LIST from IP: {ip}")
+                    return self._pack_response(msg_code, seq, resp_msg)
+
+                allowed_dirs = self.db.get_allowed_directories(user_id)
+                hidden_files = self.db.get_hidden_files(user_id)
+
                 for top_level in os.listdir(self.media_dir):
+                    if top_level not in allowed_dirs:
+                        continue
+
                     top_level_path = os.path.join(self.media_dir, top_level)
                     if os.path.isdir(top_level_path):
                         camera01_path = os.path.join(top_level_path, "Camera01")
@@ -305,21 +332,44 @@ class RTMPHandler:
                                     full_path = os.path.join(root, file)
                                     rel_path = os.path.relpath(full_path, camera01_path)
                                     uri = f"/DCIM/Camera01/{rel_path}"
-                                    resp_msg.uri.append(uri)
+                                    if uri not in hidden_files:
+                                        resp_msg.uri.append(uri)
                 resp_msg.total_count = len(resp_msg.uri)
+            elif msg_code == PHONE_COMMAND_DELETE_FILES:
+                req_msg = delete_files_pb2.DeleteFiles()
+                req_msg.ParseFromString(body)
+                logger.info(f"DeleteFiles request: {req_msg.uri}")
+
+                resp_msg = delete_files_pb2.DeleteFilesResp()
+
+                ip = self._get_ip_from_client_id(client_id)
+                user_id = self.sessions.get(ip)
+                if not user_id:
+                    logger.warning(f"Unauthorized DELETE_FILES from IP: {ip}")
+                    # If unauthorized, we might mark them all as failed
+                    resp_msg.fail_uri.extend(req_msg.uri)
+                else:
+                    self.db.hide_files(user_id, req_msg.uri)
+                    logger.info(f"Hid files for user {user_id}: {req_msg.uri}")
+
             elif msg_code == PHONE_COMMAND_CHECK_AUTHORIZATION:
                 req_msg = check_authorization_pb2.CheckAuthorization()
                 req_msg.ParseFromString(body)
                 logger.info(f"CheckAuthorization request: {req_msg}")
 
+                user = self.db.get_or_create_user(req_msg.id)
                 resp_msg = check_authorization_pb2.CheckAuthorizationResp()
-                if not self.authorized_ids or req_msg.id in self.authorized_ids:
+
+                if user.authorized:
                     logger.info(f"Authorization successful for ID: {req_msg.id}")
                     if client_id:
-                        self.sessions[client_id] = req_msg.id
+                        ip = self._get_ip_from_client_id(client_id)
+                        self.sessions[ip] = req_msg.id
+                        # The count will be maintained at connection level, but we ensure mapping exists
+                        logger.info(f"Associated IP {ip} with User {req_msg.id}")
                     resp_msg.authorization_status = check_authorization_pb2.CheckAuthorizationResp.AUTHORIZED
                 else:
-                    logger.warning(f"Authorization failed for ID: {req_msg.id}")
+                    logger.warning(f"Authorization failed for ID: {req_msg.id} - not authorized by admin.")
                     resp_msg.authorization_status = check_authorization_pb2.CheckAuthorizationResp.UNAUTHORIZED
             else:
                 RespClass = pb_resp_classes[msg_code]
@@ -334,6 +384,10 @@ class RTMPHandler:
 async def handle_client(reader, writer, rtmp_handler):
     peername = writer.get_extra_info('peername')
     logger.info(f"Accepted connection from {peername}")
+
+    if peername and isinstance(peername, tuple):
+        ip = peername[0]
+        rtmp_handler.session_counts[ip] += 1
 
     # Send SYNC packet with length prefix
     #sync_packet = bytearray(struct.pack("<i", len(PKT_SYNC) + 4))
@@ -362,7 +416,7 @@ async def handle_client(reader, writer, rtmp_handler):
                 logger.debug('Received keepalive')
                 continue
             elif pkt_data[:3] == b'\x04\00\00':
-                response_pkt = rtmp_handler.handle_packet(pkt_data, client_id=str(peername))
+                response_pkt = rtmp_handler.handle_packet(pkt_data, client_id=peername)
                 if response_pkt:
                     writer.write(response_pkt)
                     await writer.drain()
@@ -373,8 +427,19 @@ async def handle_client(reader, writer, rtmp_handler):
             logger.info(f"Client {peername} disconnected.")
             break
         except Exception as e:
-            logger.error(f"Error handling client {peername}: {e}")
+            logger.error(f"Error handling client {peername}: {e}", exc_info=True)
             break
+
+    if peername and isinstance(peername, tuple):
+        ip = peername[0]
+        if ip in rtmp_handler.sessions:
+            rtmp_handler.session_counts[ip] -= 1
+            if rtmp_handler.session_counts[ip] <= 0:
+                logger.info(f"Removing active session for disconnected client IP {ip} (no connections left)")
+                del rtmp_handler.sessions[ip]
+                del rtmp_handler.session_counts[ip]
+            else:
+                logger.info(f"Client IP {ip} disconnected but {rtmp_handler.session_counts[ip]} connections remain.")
 
     writer.close()
     await writer.wait_closed()
@@ -383,16 +448,18 @@ async def main():
     parser = argparse.ArgumentParser(description="Insta360 RTMP/HTTP/BLE Server")
     parser.add_argument("--bind", default="0.0.0.0", help="IP address to bind to")
     parser.add_argument("--dir", required=True, help="Directory to serve files from")
+    parser.add_argument("--db-dir", help="Directory to store the insta360.db file")
     parser.add_argument("--ble", action="store_true", default=True, help="Start BLE server")
     parser.add_argument("--no-ble", action="store_false", dest="ble")
     parser.add_argument("--http", action="store_true", default=True, help="Start HTTP server")
     parser.add_argument("--no-http", action="store_false", dest="http")
     parser.add_argument("--rtsp", action="store_true", default=True, help="Start RTSP server on port 6666")
     parser.add_argument("--no-rtsp", action="store_false", dest="rtsp")
-    parser.add_argument("--auth-id", action="append", help="Authorized ID(s)")
     args = parser.parse_args()
 
-    rtmp_handler = RTMPHandler(args.dir, authorized_ids=args.auth_id)
+    db_dir = args.db_dir if args.db_dir else args.dir
+    db = Database(os.path.join(db_dir, "insta360.db"))
+    rtmp_handler = RTMPHandler(args.dir, db)
     tasks = []
 
     if args.ble:
@@ -408,7 +475,89 @@ async def main():
     else:
         rtmp_server = None
 
+
+    def get_user_or_raise(request):
+        ip = request.remote
+        user_id = rtmp_handler.sessions.get(ip)
+        if not user_id:
+            logger.warning(f"Unauthorized HTTP request to {request.path} from IP: {ip}")
+            raise web.HTTPForbidden(text="Not authorized or no active session.")
+        user = db.get_user_by_id(user_id)
+        if not user:
+            raise web.HTTPForbidden(text="User not found.")
+        return user
+
+    @aiohttp_jinja2.template('admin.html')
+    async def handle_admin(request):
+        user = get_user_or_raise(request)
+        if not user.is_admin:
+            raise web.HTTPForbidden(text="Admin access required.")
+
+        if request.method == 'POST':
+            data = await request.post()
+            action = data.get('action')
+            if action == 'toggle_access':
+                target_user_id = data.get('user_id')
+                directory = data.get('directory')
+                access_granted = data.get('access_granted') == 'on'
+
+                if target_user_id and directory:
+                    db.set_directory_access(target_user_id, directory, access_granted)
+            elif action == 'toggle_authorize':
+                target_user_id = data.get('user_id')
+                authorized = data.get('authorized') == 'on'
+                if target_user_id:
+                    db.set_user_authorized(target_user_id, authorized)
+
+            raise web.HTTPFound('/admin')
+
+        all_users = db.get_all_users()
+        all_top_levels = [d for d in os.listdir(args.dir) if os.path.isdir(os.path.join(args.dir, d))]
+
+        u_access = {}
+        for u in all_users:
+            user_dirs = db.get_user_directories(u.id)
+            u_access[u.id] = set(d.directory for d in user_dirs if d.access_granted)
+
+        return {
+            'users': all_users,
+            'top_levels': all_top_levels,
+            'u_access': u_access
+        }
+
+    @aiohttp_jinja2.template('dashboard.html')
+    async def handle_dashboard(request):
+        user = get_user_or_raise(request)
+
+        if request.method == 'POST':
+            data = await request.post()
+            action = data.get('action')
+            if action == 'undelete':
+                uri = data.get('uri')
+                if uri:
+                    db.unhide_file(user.id, uri)
+            elif action == 'toggle_export':
+                directory = data.get('directory')
+                is_exported = data.get('is_exported') == 'on'
+                if directory:
+                    db.set_directory_export(user.id, directory, is_exported)
+
+            raise web.HTTPFound('/dashboard')
+
+        hidden_files = db.get_hidden_files_ordered(user.id)
+        directories = [d for d in db.get_user_directories(user.id) if d.access_granted]
+
+        return {
+            'user': user,
+            'directories': directories,
+            'hidden_files': hidden_files
+        }
+
+    @aiohttp_jinja2.template('directory.html')
     async def handle_http_request(request):
+        user = get_user_or_raise(request)
+        allowed_dirs = db.get_exported_directories(user.id)
+
         req_path = request.path
         rel_path = req_path.lstrip('/')
         if rel_path.startswith('DCIM/'):
@@ -420,10 +569,7 @@ async def main():
         if rel_path == 'DCIM' or rel_path == '':
             if not req_path.endswith('/'):
                 raise web.HTTPFound(req_path + '/')
-            html = "<html><body><table><tbody>"
-            html += '<tr><td><a href="Camera01/">Camera01</a></td><td></td><td>directory</td></tr>'
-            html += "</tbody></table></body></html>"
-            return web.Response(text=html, content_type='text/html')
+            return {'items': [{'name': 'Camera01', 'link': 'Camera01/', 'size': 'directory'}]}
 
         # Handle requests to /DCIM/Camera01...
         if rel_path == 'Camera01' or rel_path.startswith('Camera01/'):
@@ -436,6 +582,8 @@ async def main():
 
                 merged_items = {}
                 for top_level in os.listdir(args.dir):
+                    if top_level not in allowed_dirs:
+                        continue
                     top_level_path = os.path.join(args.dir, top_level)
                     if os.path.isdir(top_level_path):
                         camera01_path = os.path.join(top_level_path, "Camera01")
@@ -446,27 +594,24 @@ async def main():
                                 item_path = os.path.join(camera01_path, item)
                                 merged_items[item] = os.path.isdir(item_path)
 
-                html = "<html><body><table><tbody>"
+                items = []
                 for item in sorted(merged_items.keys()):
                     is_dir = merged_items[item]
                     size_str = "directory" if is_dir else ""
-                    # Actually get file size if it's not a directory?
                     if not is_dir:
-                        # Find the first one to get size
-                        for top_level in os.listdir(args.dir):
+                        for top_level in allowed_dirs:
                             cand = os.path.join(args.dir, top_level, "Camera01", item)
                             if os.path.isfile(cand):
                                 size_str = str(os.path.getsize(cand))
                                 break
-
                     link_path = f"{item}/" if is_dir else item
-                    html += f'<tr><td><a href="{link_path}">{item}</a></td><td></td><td>{size_str}</td></tr>'
-                html += "</tbody></table></body></html>"
-                return web.Response(text=html, content_type='text/html')
+                    items.append({'name': item, 'link': link_path, 'size': size_str})
+
+                return {'items': items}
 
             else:
                 # Find the file or sub-directory in one of the top-level directories
-                for top_level in os.listdir(args.dir):
+                for top_level in allowed_dirs:
                     top_level_path = os.path.join(args.dir, top_level)
                     if os.path.isdir(top_level_path):
                         candidate = os.path.join(top_level_path, "Camera01", sub_path)
@@ -474,7 +619,7 @@ async def main():
                             if os.path.isdir(candidate):
                                 if not req_path.endswith('/'):
                                     raise web.HTTPFound(req_path + '/')
-                                html = "<html><body><table><tbody>"
+                                items = []
                                 for item in sorted(os.listdir(candidate)):
                                     if item.startswith('.'):
                                         continue
@@ -482,10 +627,10 @@ async def main():
                                     is_dir = os.path.isdir(item_path)
                                     size_str = "directory" if is_dir else str(os.path.getsize(item_path))
                                     link_path = f"{item}/" if is_dir else item
-                                    html += f'<tr><td><a href="{link_path}">{item}</a></td><td></td><td>{size_str}</td></tr>'
-                                html += "</tbody></table></body></html>"
-                                return web.Response(text=html, content_type='text/html')
+                                    items.append({'name': item, 'link': link_path, 'size': size_str})
+                                return {'items': items}
                             else:
+                                # We no longer hide from HTTP
                                 return web.FileResponse(candidate)
 
         raise web.HTTPNotFound()
@@ -494,16 +639,25 @@ async def main():
     if args.http:
         # Start HTTP server
         app = web.Application(middlewares=[logging_middleware])
+        aiohttp_jinja2.setup(
+            app,
+            loader=jinja2.FileSystemLoader(os.path.join(os.path.dirname(__file__), "templates"))
+        )
+        app.router.add_route('GET', '/dashboard', handle_dashboard)
+        app.router.add_route('POST', '/dashboard', handle_dashboard)
+        app.router.add_route('GET', '/admin', handle_admin)
+        app.router.add_route('POST', '/admin', handle_admin)
         app.router.add_route('GET', '/{tail:.*}', handle_http_request)
         runner = web.AppRunner(app)
         await runner.setup()
-        http_site = web.TCPSite(runner, args.bind, 80)
+        http_port = 8080 if args.bind == "127.0.0.1" else 80
+        http_site = web.TCPSite(runner, args.bind, http_port)
 
         try:
             await http_site.start()
-            logger.info(f"HTTP Server started on {args.bind}:80")
+            logger.info(f"HTTP Server started on {args.bind}:{http_port}")
         except Exception as e:
-            logger.error(f"Failed to start HTTP server on port 80: {e}")
+            logger.error(f"Failed to start HTTP server on port {http_port}: {e}")
 
     try:
         # Keep the process alive
