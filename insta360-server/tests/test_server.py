@@ -18,29 +18,11 @@ def rtmp_handler(mock_db):
 def pack_rtmp_request(msg_code, seq, pb_msg):
     pb_bytes = pb_msg.SerializeToString()
 
-    # We need exactly 12 bytes of header.
-    # From server.py:
-    # pkt_data[3:5] is msg_code (2 bytes, little endian)
-    # pkt_data[6:9] is seq (3 bytes, little endian)
-
     header = b"\x04\x00\x00"
     header += struct.pack("<H", msg_code)
     header += b"\x02"
     header += struct.pack("<i", seq)[0:3]
     header += b"\x80\x00\x00"
-
-    # Actually, the parsing in handle_packet is pkt_data[:12].
-    # Let's double check len(header).
-    # \x04\x00\x00 (3)
-    # msg_code (2)
-    # \x02 (1)
-    # seq (3)
-    # \x80\x00\x00 (3)
-    # Total = 12 bytes. That is correct.
-
-    # The pkt_len given to the reader is len(payload) + 4, but handle_packet only gets the payload.
-    # Ah! handle_packet expects `pkt_data` to be JUST the payload! No, it checks `len(pkt_data) < 12`, so it expects the header too.
-    # It receives payload_len bytes which include the 12-byte header + body.
 
     return header + pb_bytes
 
