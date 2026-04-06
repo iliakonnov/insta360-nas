@@ -13,7 +13,16 @@ def mock_db():
 
 @pytest.fixture
 def rtmp_handler(mock_db):
-    return RTMPHandler(media_dir="/fake/dir", db=mock_db)
+    config = {
+        "device_name": "Test Device",
+        "camera_type": "Test Camera",
+        "firmware_revision": "v1.0.0",
+        "serial_number": "TEST123456",
+        "ota_pkg_version": "v1.0.0",
+        "wifi_ssid": "Test_WIFI",
+        "wifi_password": "TestPassword"
+    }
+    return RTMPHandler(media_dir="/fake/dir", db=mock_db, config=config)
 
 def pack_rtmp_request(msg_code, seq, pb_msg):
     pb_bytes = pb_msg.SerializeToString()

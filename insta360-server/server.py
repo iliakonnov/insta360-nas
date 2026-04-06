@@ -1,8 +1,10 @@
 import argparse
 import asyncio
+import json
 import os
 import struct
 import logging
+import sys
 from aiohttp import web
 import jinja2
 import aiohttp_jinja2
@@ -12,7 +14,6 @@ SERVICE_UUID = "0000be80-0000-1000-8000-00805f9b34fb"
 CHAR_BE81 = "0000be81-0000-1000-8000-00805f9b34fb"  # Write (From iPad)
 CHAR_BE82 = "0000be82-0000-1000-8000-00805f9b34fb"  # Notify (To iPad)
 CHAR_BE83 = "0000be83-0000-1000-8000-00805f9b34fb"  # Read
-DEVICE_NAME = "X5 1RM6"
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -93,8 +94,9 @@ pb_resp_classes = {
 }
 
 class BLEHandler:
-    def __init__(self, rtmp_handler):
+    def __init__(self, rtmp_handler, device_name):
         self.rtmp_handler = rtmp_handler
+        self.device_name = device_name
         self.server = None
         self.heartbeat_task = None
         self.ready_ack = bytes.fromhex("10000000040000172002ff8a43f40000")
@@ -127,7 +129,7 @@ class BLEHandler:
             GATTCharacteristicProperties,
             GATTAttributePermissions
         )
-        self.server = BlessServer(name=DEVICE_NAME)
+        self.server = BlessServer(name=self.device_name)
         self.server.read_request_func = self.on_read
         self.server.write_request_func = self.on_write
 
@@ -159,7 +161,7 @@ class BLEHandler:
         )
 
         await self.server.start()
-        logger.info(f"BLE server started. Advertising as: '{DEVICE_NAME}'")
+        logger.info(f"BLE server started. Advertising as: '{self.device_name}'")
         
         # Start heartbeat loop
         self.heartbeat_task = asyncio.create_task(self._heartbeat_loop())
@@ -200,9 +202,10 @@ class BLEHandler:
 from collections import defaultdict
 
 class RTMPHandler:
-    def __init__(self, media_dir, db):
+    def __init__(self, media_dir, db, config):
         self.media_dir = media_dir
         self.db = db
+        self.config = config
         # Mapping ip -> user_id
         self.sessions = {}
         # Mapping ip -> count of active RTMP connections
@@ -269,20 +272,20 @@ class RTMPHandler:
                 
                 # Device Identification
                 if get_options_pb2.CAMERA_TYPE in req_opts:
-                    resp_msg.value.camera_type = "Insta360 X5"
+                    resp_msg.value.camera_type = self.config.get("camera_type", "Insta360 X5")
                 if get_options_pb2.FIRMWAREREVISION in req_opts:
-                    resp_msg.value.firmwareRevision = "v1.13.3"
+                    resp_msg.value.firmwareRevision = self.config.get("firmware_revision", "v1.13.3")
                 if get_options_pb2.SERIAL_NUMBER in req_opts:
-                    resp_msg.value.serial_number = "IAHEA2501RM6GY"
+                    resp_msg.value.serial_number = self.config.get("serial_number", "IAHEA2501RM6GY")
                 if get_options_pb2.OTA_PKG_VERSION in req_opts:
-                    resp_msg.value.ota_pkg_version = "v1.13.3"
+                    resp_msg.value.ota_pkg_version = self.config.get("ota_pkg_version", "v1.13.3")
                 if get_options_pb2.ACTIVATE_TIME in req_opts:
                     resp_msg.value.activate_time = 1712234567 # Non-zero activation time
                 
                 # Network & Connectivity
                 if get_options_pb2.WIFI_INFO in req_opts:
-                    resp_msg.value.wifi_info.ssid = "X5 1RM6GZ.OSC"
-                    resp_msg.value.wifi_info.password = "L:ZpN8y}4)9kRW8"
+                    resp_msg.value.wifi_info.ssid = self.config.get("wifi_ssid", "X5 1RM6GZ.OSC")
+                    resp_msg.value.wifi_info.password = self.config.get("wifi_password", "L:ZpN8y}4)9kRW8")
                     resp_msg.value.wifi_info.channel = 6
                     resp_msg.value.wifi_info.mode = resp_msg.value.wifi_info.Mode.AP
                     resp_msg.value.wifi_info.wifi_state = resp_msg.value.wifi_info.WifiState.ON
@@ -473,6 +476,7 @@ async def main():
     parser.add_argument("--bind", default="0.0.0.0", help="IP address to bind to")
     parser.add_argument("--dir", required=True, help="Directory to serve files from")
     parser.add_argument("--db-dir", help="Directory to store the insta360.db file")
+    parser.add_argument("--config-file", required=True, help="Path to the JSON configuration file for secrets")
     parser.add_argument("--ble", action="store_true", default=False, help="Start BLE server")
     parser.add_argument("--http", action="store_true", default=True, help="Start HTTP server")
     parser.add_argument("--no-http", action="store_false", dest="http")
@@ -480,13 +484,25 @@ async def main():
     parser.add_argument("--no-rtsp", action="store_false", dest="rtsp")
     args = parser.parse_args()
 
+    if not os.path.isfile(args.config_file):
+        logger.error(f"Configuration file not found: {args.config_file}")
+        sys.exit(1)
+
+    try:
+        with open(args.config_file, "r") as f:
+            config = json.load(f)
+    except Exception as e:
+        logger.error(f"Failed to parse config file: {e}")
+        sys.exit(1)
+
     db_dir = args.db_dir if args.db_dir else args.dir
     db = Database(os.path.join(db_dir, "insta360.db"))
-    rtmp_handler = RTMPHandler(args.dir, db)
+    rtmp_handler = RTMPHandler(args.dir, db, config)
     tasks = []
 
     if args.ble:
-        ble_handler = BLEHandler(rtmp_handler)
+        device_name = config.get("device_name", "X5 1RM6")
+        ble_handler = BLEHandler(rtmp_handler, device_name)
         await ble_handler.start()
 
     if args.rtsp:
