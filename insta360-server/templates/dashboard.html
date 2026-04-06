@@ -1,36 +1,80 @@
-<html><body>
-<h1>Dashboard - {{ user.name }}</h1>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - {{ user.name }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+    <div class="container py-5">
+        <div class="row mb-4">
+            <div class="col">
+                <h1 class="display-5">Dashboard - <span class="text-primary">{{ user.name }}</span></h1>
+            </div>
+        </div>
 
-<h2>Exported Directories</h2>
-<table>
-    <tr><th>Directory</th><th>Exported</th><th>Action</th></tr>
-    {% for d in directories %}
-    <tr>
-        <td>{{ d.directory }}</td>
-        <td>
-            <form style='display:inline;' method='POST'>
-                <input type='hidden' name='action' value='toggle_export'>
-                <input type='hidden' name='directory' value='{{ d.directory }}'>
-                <input type='checkbox' name='is_exported' value='on' {{ 'checked' if d.is_exported else '' }} onchange='this.form.submit()'>
-            </form>
-        </td>
-        <td>Toggle Exported Status</td>
-    </tr>
-    {% endfor %}
-</table>
+        <div class="card shadow-sm mb-5">
+            <div class="card-header bg-white">
+                <h2 class="h4 mb-0 py-2">Exported Directories</h2>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0 align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th class="px-4 py-3">Directory</th>
+                                <th class="px-4 py-3">Exported</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for d in directories %}
+                            <tr>
+                                <td class="px-4 py-3 font-monospace">{{ d.directory }}</td>
+                                <td class="px-4 py-3">
+                                    <form style='display:inline;' method='POST'>
+                                        <input type='hidden' name='action' value='toggle_export'>
+                                        <input type='hidden' name='directory' value='{{ d.directory }}'>
+                                        <div class="form-check form-switch">
+                                            <input class="form-check-input" type='checkbox' role="switch" name='is_exported' value='on' {{ 'checked' if d.is_exported else '' }} onchange='this.form.submit()'>
+                                            <label class="form-check-label text-muted">{{ 'Active' if d.is_exported else 'Inactive' }}</label>
+                                        </div>
+                                    </form>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
 
-<h2>Hidden Files</h2>
-<ul>
-    {% for uri in hidden_files %}
-    <li>{{ uri }}
-        <form style='display:inline;' method='POST'>
-            <input type='hidden' name='action' value='undelete'>
-            <input type='hidden' name='uri' value='{{ uri }}'>
-            <button type='submit'>Undelete</button>
-        </form>
-    </li>
-    {% else %}
-    <li>No hidden files.</li>
-    {% endfor %}
-</ul>
-</body></html>
+        <div class="card shadow-sm">
+            <div class="card-header bg-white">
+                <h2 class="h4 mb-0 py-2">Hidden Files</h2>
+            </div>
+            <div class="card-body">
+                {% if hidden_files %}
+                <ul class="list-group list-group-flush">
+                    {% for uri in hidden_files %}
+                    <li class="list-group-item d-flex justify-content-between align-items-center px-0">
+                        <span class="font-monospace text-break">{{ uri }}</span>
+                        <form style='display:inline;' method='POST' class="ms-3">
+                            <input type='hidden' name='action' value='undelete'>
+                            <input type='hidden' name='uri' value='{{ uri }}'>
+                            <button type='submit' class="btn btn-outline-secondary btn-sm">Undelete</button>
+                        </form>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <div class="text-center py-4 text-muted">
+                    <p class="mb-0">No hidden files.</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
