@@ -9,6 +9,21 @@ This project simulates an Insta360 camera, allowing the official Insta360 app to
 - **HTTP Admin & Dashboard**: Includes a built-in web dashboard where you can manage user access, authorize users, and undelete/unhide files.
 - **File Management & Tracking**: Maintains an SQLite database to track authorized users, directory access, and safely handles file deletion requests by "hiding" them instead of deleting your actual media.
 
+## User Management & Web Interface
+
+Because this server connects directly to your NAS and exposes files over the network, it features a built-in user management and authorization system. When a device running the Insta360 app connects to the server for the first time, its connection is intercepted and tracked.
+
+The server runs two primary web endpoints over HTTP (accessible on port 80/8080 depending on your bind IP):
+
+### Admin Panel (`/admin`)
+- **Device Authorization**: When an Insta360 app connects, it is placed in an unauthorized state. An admin must visit the `/admin` interface to explicitly authorize the specific device.
+- **Directory Access Control**: The admin can configure exactly which top-level directories each authorized device is permitted to see.
+
+### User Dashboard (`/dashboard`)
+Once authorized, an individual user/device can visit the `/dashboard` endpoint:
+- **Exported Directories**: Users can toggle which of their permitted directories are actively "exported" and visible to the Insta360 app at any given time.
+- **File Recovery (Undelete)**: If a user deletes a file from the Insta360 app, the server does *not* delete the file from the NAS. Instead, it marks the file as "hidden" in the local SQLite database. The user can view these hidden files in their dashboard and unhide them if they were deleted by mistake.
+
 ## Network Requirements
 
 For the official Insta360 app to successfully connect to your server, your network configuration must meet these strict requirements:
