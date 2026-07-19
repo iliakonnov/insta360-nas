@@ -14,21 +14,6 @@
       let
         pkgs = import nixpkgs { inherit system; };
 
-        lib-one-proto = pkgs.python3Packages.buildPythonPackage rec {
-          pname = "lib_one_proto";
-          version = "0.1.4";
-          format = "wheel";
-          src = pkgs.fetchurl {
-            url = "https://files.pythonhosted.org/packages/2e/c7/5cffb4cfe7715c9c2ce86eab23ea0ebddd3cd0c99eefa06ee3ee9f4a292a/lib_one_proto-0.1.4-py3-none-any.whl";
-            hash = "sha256-58oMJ9SZrf/9W1REWy2OHn9+Ipby5PyeY8464mhV5K0=";
-          };
-          propagatedBuildInputs = [ pkgs.python3Packages.protobuf ];
-          pythonImportsCheck = [ "lib_one_proto" ];
-          pythonCatchConflictsPhase = "true";
-          pythonRemoveBinBytecodePhase = "true";
-          dontCheckRuntimeDeps = true;
-        };
-
       in {
         default = pkgs.python3Packages.buildPythonApplication {
           pname = "insta360-server";
@@ -40,7 +25,6 @@
 
           propagatedBuildInputs = with pkgs.python3Packages; [
             aiohttp
-            lib-one-proto
             protobuf
             bless
             aiohttp-jinja2
@@ -58,7 +42,7 @@ from setuptools import setup
 setup(
     name='insta360-server',
     version='0.1.0',
-    py_modules=['server', 'database'],
+    py_modules=['server', 'database', 'insta360_messages_pb2'],
     entry_points={
         'console_scripts': [
             'insta360-server=server:main_entry',

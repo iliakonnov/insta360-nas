@@ -2,7 +2,8 @@ import pytest
 from unittest.mock import Mock, patch
 from server import RTMPHandler, PHONE_COMMAND_CHECK_AUTHORIZATION, PHONE_COMMAND_GET_FILE_LIST
 from database import Database, User
-from lib_one_proto import check_authorization_pb2, get_file_list_pb2
+import insta360_messages_pb2 as check_authorization_pb2
+get_file_list_pb2 = check_authorization_pb2
 import struct
 import os
 

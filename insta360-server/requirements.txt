@@ -1,5 +1,5 @@
 aiohttp
--e ../third-party/insta360-lib-one-proto
+protobuf
 -e ../third-party/insta360
 bless; extra == "ble"
 aiohttp-jinja2

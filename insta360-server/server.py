@@ -21,22 +21,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger('insta360-server')
 
-from lib_one_proto import (
-    get_options_pb2,
-    set_options_pb2,
-    get_file_list_pb2,
-    set_photography_options_pb2,
-    get_photography_options_pb2,
-    start_capture_pb2,
-    stop_capture_pb2,
-    take_picture_pb2,
-    start_live_stream_pb2,
-    stop_live_stream_pb2,
-    get_current_capture_status_pb2,
-    check_authorization_pb2,
-    wifi_mode_pb2,
-    delete_files_pb2,
-)
+import insta360_messages_pb2 as pb
 from database import Database
 
 PKT_SYNC = b"\x06\x00\x00syNceNdinS"
@@ -59,6 +44,20 @@ PHONE_COMMAND_CHECK_AUTHORIZATION = 39
 PHONE_COMMAND_RESET_WIFI = 125
 PHONE_COMMAND_PREPARE_GET_FILE_SYNC_PACKAGE = 151
 
+# Real Insta360 X5 (fw v1.11.6) lens-calibration offsets, captured verbatim from a
+# genuine camera. The app resolves the X5 dual-fisheye lens from these strings; without
+# them (or with a malformed value) it shows "Lens not supported". Leading "2_" = two sensors.
+X5_ORIGIN_OFFSET = '2_2.000000_4282.240_4284.240_2703.750_2677.660_-0.428_0.477_90.071_0.000000_0.000000_0.000000_0.18705679_2.05565047_-3.26168799_-0.00052333_-0.00110731_10752_5376_113_2.000000_4275.300_4275.880_8100.790_2678.900_0.447_0.332_90.187_-0.000686_-0.000039_-0.032337_0.18417993_2.11343169_-3.28225327_0.00080069_-0.00211436_10752_5376_113_197632'
+X5_ORIGIN_OFFSET_V2 = '2_2660.280_2703.750_2677.660_-0.428_0.477_90.071_0.000000_0.000000_0.000000_1.00000000_-0.18801893_0.27138636_-0.08917432_10752_5376_113_2663.923_8100.790_2678.900_0.447_0.332_90.187_-0.000686_-0.000039_-0.032337_1.00000000_-0.19039273_0.27336815_-0.08904169_10752_5376_113_132096'
+X5_ORIGIN_OFFSET_V3 = '2_2.000000_4282.240_4284.240_2703.750_2677.660_-0.428_0.477_90.071_0.000000_0.000000_0.000000_0.18705679_2.05565047_-3.26168799_-0.00052333_-0.00110731_10752_5376_113_2.000000_4275.300_4275.880_8100.790_2678.900_0.447_0.332_90.187_-0.000686_-0.000039_-0.032337_0.18417993_2.11343169_-3.28225327_0.00080069_-0.00211436_10752_5376_113_197632'
+X5_MEDIA_OFFSET = '2_2653.309_2703.750_2677.660_-0.428_0.477_90.071_2652.531_8100.790_2678.900_0.447_0.332_90.187_10752_5376_1137'
+X5_MEDIA_OFFSET_V2 = '2_2660.280_2703.750_2677.660_-0.428_0.477_90.071_0.000000_0.000000_0.000000_1.00000000_-0.18801893_0.27138636_-0.08917432_10752_5376_113_2663.923_8100.790_2678.900_0.447_0.332_90.187_-0.000686_-0.000039_-0.032337_1.00000000_-0.19039273_0.27336815_-0.08904169_10752_5376_113_132096'
+X5_MEDIA_OFFSET_V3 = '2_2.000000_4282.240_4284.240_2703.750_2677.660_-0.428_0.477_90.071_0.000000_0.000000_0.000000_0.18705679_2.05565047_-3.26168799_-0.00052333_-0.00110731_10752_5376_113_2.000000_4275.300_4275.880_8100.790_2678.900_0.447_0.332_90.187_-0.000686_-0.000039_-0.032337_0.18417993_2.11343169_-3.28225327_0.00080069_-0.00211436_10752_5376_113_197632'
+
+# The battery option (value 11) was removed from v2.29's OptionType enum but the app
+# still requests it by raw value; proto3 preserves it as an unknown enum int.
+OPT_BATTERY_INFO = 11
+
 @web.middleware
 async def logging_middleware(request, handler):
     logger.info(f"HTTP Request: {request.method} {request.path} from {request.remote}")
@@ -78,19 +77,19 @@ RESPONSE_CODE_OK = 200
 
 # Classes dictionary
 pb_resp_classes = {
-    PHONE_COMMAND_GET_OPTIONS: get_options_pb2.GetOptionsResp,
-    PHONE_COMMAND_SET_OPTIONS: set_options_pb2.SetOptionsResp,
-    PHONE_COMMAND_GET_FILE_LIST: get_file_list_pb2.GetFileListResp,
-    PHONE_COMMAND_SET_PHOTOGRAPHY_OPTIONS: set_photography_options_pb2.SetPhotographyOptionsResp,
-    PHONE_COMMAND_GET_PHOTOGRAPHY_OPTIONS: get_photography_options_pb2.GetPhotographyOptionsResp,
-    PHONE_COMMAND_START_CAPTURE: start_capture_pb2.StartCaptureResp,
-    PHONE_COMMAND_STOP_CAPTURE: stop_capture_pb2.StopCaptureResp,
-    PHONE_COMMAND_TAKE_PICTURE: take_picture_pb2.TakePictureResponse,
-    PHONE_COMMAND_START_LIVE_STREAM: start_live_stream_pb2.StartLiveStreamResp,
-    PHONE_COMMAND_STOP_LIVE_STREAM: stop_live_stream_pb2.StopLiveStreamResp,
-    PHONE_COMMAND_GET_CURRENT_CAPTURE_STATUS: get_current_capture_status_pb2.GetCurrentCaptureStatusResp,
-    PHONE_COMMAND_CHECK_AUTHORIZATION: check_authorization_pb2.CheckAuthorizationResp,
-    PHONE_COMMAND_DELETE_FILES: delete_files_pb2.DeleteFilesResp,
+    PHONE_COMMAND_GET_OPTIONS: pb.GetOptionsResp,
+    PHONE_COMMAND_SET_OPTIONS: pb.SetOptionsResp,
+    PHONE_COMMAND_GET_FILE_LIST: pb.GetFileListResp,
+    PHONE_COMMAND_SET_PHOTOGRAPHY_OPTIONS: pb.SetPhotographyOptionsResp,
+    PHONE_COMMAND_GET_PHOTOGRAPHY_OPTIONS: pb.GetPhotographyOptionsResp,
+    PHONE_COMMAND_START_CAPTURE: pb.StartCaptureResp,
+    PHONE_COMMAND_STOP_CAPTURE: pb.StopCaptureResp,
+    PHONE_COMMAND_TAKE_PICTURE: pb.TakePictureResponse,
+    PHONE_COMMAND_START_LIVE_STREAM: pb.StartLiveStreamResp,
+    PHONE_COMMAND_STOP_LIVE_STREAM: pb.StopLiveStreamResp,
+    PHONE_COMMAND_GET_CURRENT_CAPTURE_STATUS: pb.GetCurrentCaptureStatusResp,
+    PHONE_COMMAND_CHECK_AUTHORIZATION: pb.CheckAuthorizationResp,
+    PHONE_COMMAND_DELETE_FILES: pb.DeleteFilesResp,
 }
 
 class BLEHandler:
@@ -254,11 +253,11 @@ class RTMPHandler:
                 return bytes(pkt_data)
 
             if msg_code == PHONE_COMMAND_GET_OPTIONS:
-                req_msg = get_options_pb2.GetOptions()
+                req_msg = pb.GetOptions()
                 req_msg.ParseFromString(body)
                 logger.info(f"GetOptions request: {req_msg}")
 
-                resp_msg = get_options_pb2.GetOptionsResp()
+                resp_msg = pb.GetOptionsResp()
                 
                 # Copy requested options to response
                 for opt in req_msg.option_types:
@@ -269,47 +268,85 @@ class RTMPHandler:
                         pass
 
                 req_opts = set(req_msg.option_types)
-                
-                # Device Identification
-                if get_options_pb2.CAMERA_TYPE in req_opts:
-                    resp_msg.value.camera_type = self.config.get("camera_type", "Insta360 X5")
-                if get_options_pb2.FIRMWAREREVISION in req_opts:
-                    resp_msg.value.firmwareRevision = self.config.get("firmware_revision", "v1.13.3")
-                if get_options_pb2.SERIAL_NUMBER in req_opts:
-                    resp_msg.value.serial_number = self.config.get("serial_number", "IAHEA2501RM6GY")
-                if get_options_pb2.OTA_PKG_VERSION in req_opts:
-                    resp_msg.value.ota_pkg_version = self.config.get("ota_pkg_version", "v1.13.3")
-                if get_options_pb2.ACTIVATE_TIME in req_opts:
-                    resp_msg.value.activate_time = 1712234567 # Non-zero activation time
-                
-                # Network & Connectivity
-                if get_options_pb2.WIFI_INFO in req_opts:
-                    resp_msg.value.wifi_info.ssid = self.config.get("wifi_ssid", "X5 1RM6GZ.OSC")
-                    resp_msg.value.wifi_info.password = self.config.get("wifi_password", "L:ZpN8y}4)9kRW8")
-                    resp_msg.value.wifi_info.channel = 6
-                    resp_msg.value.wifi_info.mode = resp_msg.value.wifi_info.Mode.AP
-                    resp_msg.value.wifi_info.wifi_state = resp_msg.value.wifi_info.WifiState.ON
-                
-                if get_options_pb2.WIFI_CHANNEL_LIST in req_opts:
-                    resp_msg.value.wifi_channel_list.country_code = "RU"
-                    # Example 5GHz + 2.4GHz channel list
-                    resp_msg.value.wifi_channel_list.channel_list = bytes.fromhex("24282c3095999da1a50000000000000000000000000000000000000000000000")
+                v = resp_msg.value
 
-                # Status
-                if get_options_pb2.BATTERY_STATUS in req_opts:
-                    resp_msg.value.battery_status.battery_level = 95
-                    resp_msg.value.battery_status.battery_scale = 100
-                    resp_msg.value.battery_status.power_type = resp_msg.value.battery_status.PowerType.BATTERY
-                
-                if get_options_pb2.MEDIA_OFFSET in req_opts:
-                    # Real media offset from X5 trace
-                    resp_msg.value.media_offset = "n2_2653.309_2703.750_2677.660_-0.428_0.477_90.071_2652.531_8100.790_2678.900_0.447_0.332_90.187_10752_5376_1137"
+                # --- Lens geometry: the real-X5 calibration that makes the app accept
+                # the X5 dual-fisheye lens (see X5_* constants). This is what fixes
+                # "Lens not supported". ---
+                if pb.ORIGIN_OFFSET in req_opts:
+                    v.origin_offset = X5_ORIGIN_OFFSET
+                if pb.ORIGIN_OFFSET_V2 in req_opts:
+                    v.origin_offset_v2 = X5_ORIGIN_OFFSET_V2
+                if pb.ORIGIN_OFFSET_V3 in req_opts:
+                    v.origin_offset_v3 = X5_ORIGIN_OFFSET_V3
+                if pb.MEDIA_OFFSET in req_opts:
+                    v.media_offset = X5_MEDIA_OFFSET
+                if pb.MEDIA_OFFSET_V2 in req_opts:
+                    v.media_offset_v2 = X5_MEDIA_OFFSET_V2
+                if pb.MEDIA_OFFSET_V3 in req_opts:
+                    v.media_offset_v3 = X5_MEDIA_OFFSET_V3
+                if pb.INSTAPANO_FOCUS_SENSOR in req_opts:
+                    v.focusSensor = pb.SENSOR_DEVICE_ALL
+                if pb.EXPECT_OUTPUT_TYPE in req_opts:
+                    v.expectOutputType = pb.Options.INSTA_PANO
 
-                if get_options_pb2.QUICK_READER_MOVING_FLAG in req_opts:
-                    resp_msg.value.quick_reader_moving_flag = False
+                # --- Device identity (private bits come from config.json) ---
+                if pb.CAMERA_TYPE in req_opts:
+                    v.camera_type = self.config.get("camera_type", "Insta360 X5")
+                if pb.FIRMWAREREVISION in req_opts:
+                    v.firmwareRevision = self.config.get("firmware_revision", "v1.11.6")
+                if pb.SERIAL_NUMBER in req_opts:
+                    v.serial_number = self.config.get("serial_number", "EXAMP123456789")
+                if pb.OTA_PKG_VERSION in req_opts:
+                    v.ota_pkg_version = self.config.get("ota_pkg_version", "v1.11.6")
+                if pb.UUID in req_opts:
+                    v.UUID = self.config.get("uuid", "insta360-00000000-0000-0000-0000-000000000000")
+                if pb.ACTIVATE_TIME in req_opts:
+                    v.activate_time = self.config.get("activate_time", 1754415045000)
+
+                # --- Network & Connectivity ---
+                if pb.WIFI_INFO in req_opts:
+                    v.wifi_info.ssid = self.config.get("wifi_ssid", "X5 EXAMP.OSC")
+                    v.wifi_info.password = self.config.get("wifi_password", "ExamplePassword123")
+                    v.wifi_info.channel = 149
+                    v.wifi_info.wifi_state = pb.Options.WifiInfo.AUTO
+                    v.wifi_info.passwd_version = 1
+                if pb.WIFI_CHANNEL_LIST in req_opts:
+                    v.wifi_channel_list.country_code = "RU"
+                    v.wifi_channel_list.channel_list = bytes.fromhex("24282c3095999da1a5" + "00" * 23)
+
+                # --- Status (values a connected X5 reports) ---
+                if OPT_BATTERY_INFO in req_opts:
+                    v.battery_info.power_type = pb.BatteryInfo.ADAPTER_
+                    v.battery_info.battery_level = 95
+                if pb.MUTE in req_opts:
+                    v.mute = True
+                if pb.GYRO_TIME_STAMP in req_opts:
+                    v.gyro_timestamp = 1.6
+                if pb.MAIN_VIDEO_ENCODE_TYPE in req_opts:
+                    v.main_video_encode_type = pb.Options.ENCODE_H265
+                if pb.OFFSET_DETECTED_TYPE in req_opts:
+                    v.offset_detected_type = pb.Auto_off
+                if pb.CHECK_BIAS_CORRECTED in req_opts:
+                    v.check_bias_corrected = True
+                if pb.FREEFRAME_GRID in req_opts:
+                    v.freeframe_grid_enable = True
+                if pb.TIME_WATERMARK_SWITCH in req_opts:
+                    v.time_watermark_switch = True
+                if pb.STORAGE_STATE in req_opts:
+                    v.storage_state.free_space = 373246001152
+                    v.storage_state.total_space = 511850840064
+                if pb.PHOTO_SUB_MODE in req_opts:
+                    v.photo_sub_mode = pb.PHOTO_NONE
+                if pb.DASHCAM_INFO in req_opts:
+                    v.dashcam_info.disk_total_space = 511850840064
+                    v.dashcam_info.disk_free_size = 373246001152
+                    v.dashcam_info.dash_cam_loop_space = 51185084006
+                if pb.QUICK_READER_MOVING_FLAG in req_opts:
+                    v.quick_reader_moving_flag = False
 
             elif msg_code == PHONE_COMMAND_GET_FILE_LIST:
-                resp_msg = get_file_list_pb2.GetFileListResp()
+                resp_msg = pb.GetFileListResp()
                 ip = self._get_ip_from_client_id(client_id)
                 user_id = self.sessions.get(ip)
                 if not user_id:
@@ -339,11 +376,11 @@ class RTMPHandler:
                                         resp_msg.uri.append(uri)
                 resp_msg.total_count = len(resp_msg.uri)
             elif msg_code == PHONE_COMMAND_DELETE_FILES:
-                req_msg = delete_files_pb2.DeleteFiles()
+                req_msg = pb.DeleteFiles()
                 req_msg.ParseFromString(body)
                 logger.info(f"DeleteFiles request: {req_msg.uri}")
 
-                resp_msg = delete_files_pb2.DeleteFilesResp()
+                resp_msg = pb.DeleteFilesResp()
 
                 ip = self._get_ip_from_client_id(client_id)
                 user_id = self.sessions.get(ip)
@@ -380,12 +417,12 @@ class RTMPHandler:
                         logger.info(f"Hid files for user {user_id}: {files_to_hide}")
 
             elif msg_code == PHONE_COMMAND_CHECK_AUTHORIZATION:
-                req_msg = check_authorization_pb2.CheckAuthorization()
+                req_msg = pb.CheckAuthorization()
                 req_msg.ParseFromString(body)
                 logger.info(f"CheckAuthorization request: {req_msg}")
 
                 user = self.db.get_or_create_user(req_msg.id)
-                resp_msg = check_authorization_pb2.CheckAuthorizationResp()
+                resp_msg = pb.CheckAuthorizationResp()
 
                 if user.authorized:
                     logger.info(f"Authorization successful for ID: {req_msg.id}")
@@ -394,10 +431,10 @@ class RTMPHandler:
                         self.sessions[ip] = req_msg.id
                         # The count will be maintained at connection level, but we ensure mapping exists
                         logger.info(f"Associated IP {ip} with User {req_msg.id}")
-                    resp_msg.authorization_status = check_authorization_pb2.CheckAuthorizationResp.AUTHORIZED
+                    resp_msg.authorization_status = pb.CheckAuthorizationResp.AUTHORIZED
                 else:
                     logger.warning(f"Authorization failed for ID: {req_msg.id} - not authorized by admin.")
-                    resp_msg.authorization_status = check_authorization_pb2.CheckAuthorizationResp.UNAUTHORIZED
+                    resp_msg.authorization_status = pb.CheckAuthorizationResp.UNAUTHORIZED
             else:
                 RespClass = pb_resp_classes[msg_code]
                 resp_msg = RespClass()

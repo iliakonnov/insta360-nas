@@ -1,9 +1,11 @@
 {
   "device_name": "Insta360 Example",
   "camera_type": "Insta360 X5",
-  "firmware_revision": "v1.13.3",
+  "firmware_revision": "v1.11.6",
   "serial_number": "EXAMP123456789",
-  "ota_pkg_version": "v1.13.3",
+  "ota_pkg_version": "v1.11.6",
+  "uuid": "insta360-00000000-0000-0000-0000-000000000000",
+  "activate_time": 1754415045000,
   "wifi_ssid": "X5 EXAMP.OSC",
   "wifi_password": "ExamplePassword123"
 }
