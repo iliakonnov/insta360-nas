@@ -40,6 +40,7 @@ PHONE_COMMAND_GET_PHOTOGRAPHY_OPTIONS = 10
 PHONE_COMMAND_GET_FILE_LIST = 13
 PHONE_COMMAND_DELETE_FILES = 12
 PHONE_COMMAND_GET_CURRENT_CAPTURE_STATUS = 15
+PHONE_COMMAND_GET_FILEINFO_LIST = 38
 PHONE_COMMAND_CHECK_AUTHORIZATION = 39
 PHONE_COMMAND_RESET_WIFI = 125
 PHONE_COMMAND_PREPARE_GET_FILE_SYNC_PACKAGE = 151
@@ -57,6 +58,56 @@ X5_MEDIA_OFFSET_V3 = '2_2.000000_4282.240_4284.240_2703.750_2677.660_-0.428_0.47
 # The battery option (value 11) was removed from v2.29's OptionType enum but the app
 # still requests it by raw value; proto3 preserves it as an unknown enum int.
 OPT_BATTERY_INFO = 11
+
+# Gallery media extensions (the .insv/.insp captures the app lists); .lrv are low-res
+# proxies the camera does NOT include in its file-info list, so we skip them too.
+GALLERY_EXTS = (".insv", ".insp", ".mp4", ".jpg", ".dng")
+_VIDEO_EXTS = (".insv", ".mp4")
+
+
+def _parse_creation_time(name):
+    """VID_20251221_124744_00_001.insv -> 20251221124744 (int); 0 if not parseable."""
+    parts = name.split("_")
+    for i in range(len(parts) - 1):
+        if len(parts[i]) == 8 and parts[i].isdigit() and len(parts[i + 1]) == 6 and parts[i + 1].isdigit():
+            return int(parts[i] + parts[i + 1])
+    return 0
+
+
+def build_file_metadata(uri, full_path, config):
+    """Build the per-file ExtraMetadata blob the v2.29 app needs to render a gallery
+    card (GET_FILEINFO_LIST / code 38). Mirrors what a real X5 returns: identity +
+    real size/creation-time/duration + the X5 stitching offsets (needed for playback)
+    + dimensions. Duration is estimated from size (X5 5.7K ~= 15 MB/s) to avoid heavy
+    per-file media parsing on every gallery poll."""
+    name = os.path.basename(uri)
+    ext = os.path.splitext(name)[1].lower()
+    try:
+        size = os.path.getsize(full_path)
+    except OSError:
+        size = 0
+    em = pb.ExtraMetadata()
+    em.serial_number = config.get("serial_number", "EXAMP123456789")
+    em.camera_type = config.get("camera_type", "Insta360 X5")
+    em.fw_version = config.get("firmware_revision", "v1.11.6")
+    em.creation_time = _parse_creation_time(name) or 0
+    em.file_size = size
+    if ext in _VIDEO_EXTS and size:
+        em.total_time = max(1, size // 15_000_000)  # approx seconds
+    em.offset = X5_MEDIA_OFFSET
+    em.offset_v2 = X5_MEDIA_OFFSET_V2
+    em.offset_v3 = X5_MEDIA_OFFSET_V3
+    em.original_offset = X5_MEDIA_OFFSET
+    em.original_offset_v2 = X5_MEDIA_OFFSET_V2
+    em.original_offset_v3 = X5_MEDIA_OFFSET_V3
+    em.dimension.x = 2880
+    em.dimension.y = 2880
+    em.resolution_size.x = 2880
+    em.resolution_size.y = 2880
+    em.frame_rate = 30
+    em.fov_type = pb.FOV_TYPE_MEGA
+    em.file_group_info.identify = uri
+    return em.SerializeToString()
 
 @web.middleware
 async def logging_middleware(request, handler):
@@ -90,6 +141,7 @@ pb_resp_classes = {
     PHONE_COMMAND_GET_CURRENT_CAPTURE_STATUS: pb.GetCurrentCaptureStatusResp,
     PHONE_COMMAND_CHECK_AUTHORIZATION: pb.CheckAuthorizationResp,
     PHONE_COMMAND_DELETE_FILES: pb.DeleteFilesResp,
+    PHONE_COMMAND_GET_FILEINFO_LIST: pb.FileInfo_List,
 }
 
 class BLEHandler:
@@ -375,6 +427,46 @@ class RTMPHandler:
                                     if long_path not in hidden_files:
                                         resp_msg.uri.append(uri)
                 resp_msg.total_count = len(resp_msg.uri)
+            elif msg_code == PHONE_COMMAND_GET_FILEINFO_LIST:
+                # The v2.29 app builds its gallery from GET_FILEINFO_LIST (code 38),
+                # NOT GET_FILE_LIST (code 13). It expects FileInfo_List{ FileInfo{
+                # file_path, metadata } } with per-file metadata. Same walk/auth/hidden
+                # logic as code 13, but emit one FileInfo per gallery media file.
+                resp_msg = pb.FileInfo_List()
+                ip = self._get_ip_from_client_id(client_id)
+                user_id = self.sessions.get(ip)
+                if not user_id:
+                    logger.warning(f"Unauthorized GET_FILEINFO_LIST from IP: {ip}")
+                    return self._pack_response(msg_code, seq, resp_msg)
+
+                allowed_dirs = self.db.get_exported_directories(user_id)
+                hidden_files = self.db.get_hidden_files(user_id)
+
+                for top_level in os.listdir(self.media_dir):
+                    if top_level not in allowed_dirs:
+                        continue
+                    top_level_path = os.path.join(self.media_dir, top_level)
+                    if not os.path.isdir(top_level_path):
+                        continue
+                    camera01_path = os.path.join(top_level_path, "Camera01")
+                    if not os.path.isdir(camera01_path):
+                        continue
+                    for root, dirs, files in os.walk(camera01_path):
+                        for file in files:
+                            if file.startswith('.'):
+                                continue
+                            if os.path.splitext(file)[1].lower() not in GALLERY_EXTS:
+                                continue  # skip .lrv proxies and other non-gallery files
+                            full_path = os.path.join(root, file)
+                            rel_path = os.path.relpath(full_path, camera01_path)
+                            long_path = os.path.join(top_level, "Camera01", rel_path)
+                            if long_path in hidden_files:
+                                continue
+                            uri = f"/DCIM/Camera01/{rel_path}"
+                            fi = resp_msg.file_info.add()
+                            fi.file_path = uri
+                            fi.metadata = build_file_metadata(uri, full_path, self.config)
+                logger.info(f"GET_FILEINFO_LIST returning {len(resp_msg.file_info)} files")
             elif msg_code == PHONE_COMMAND_DELETE_FILES:
                 req_msg = pb.DeleteFiles()
                 req_msg.ParseFromString(body)

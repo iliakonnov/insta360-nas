@@ -140,3 +140,53 @@ def test_rtmp_get_file_list_unauthorized(rtmp_handler, mock_db):
     resp_msg = unpack_rtmp_response(response, get_file_list_pb2.GetFileListResp)
     assert resp_msg.total_count == 0
     assert len(resp_msg.uri) == 0
+
+
+@patch('server.os.path.getsize')
+@patch('server.os.listdir')
+@patch('server.os.path.isdir')
+@patch('server.os.walk')
+def test_rtmp_get_fileinfo_list(mock_walk, mock_isdir, mock_listdir, mock_getsize, rtmp_handler, mock_db):
+    """Code 38 (GET_FILEINFO_LIST) must return FileInfo_List with per-file metadata,
+    skipping .lrv proxies, hidden files and dotfiles (this is what the v2.29 gallery uses)."""
+    from server import PHONE_COMMAND_GET_FILEINFO_LIST
+    import insta360_messages_pb2 as pb
+
+    rtmp_handler.sessions["127.0.0.1"] = "user1"
+    mock_db.get_exported_directories.return_value = ["SDCard"]
+    mock_db.get_hidden_files.return_value = set(["SDCard/Camera01/VID_hidden_00_009.insv"])
+    mock_listdir.return_value = ["SDCard"]
+    mock_isdir.return_value = True
+    mock_getsize.return_value = 3_000_000_000
+
+    mock_walk.side_effect = lambda path: [(path, [], [
+        "VID_20251221_124744_00_001.insv",
+        "LRV_20251221_124744_00_001.lrv",   # proxy -> excluded
+        "VID_hidden_00_009.insv",           # hidden -> excluded
+        ".DS_Store",                        # dotfile -> excluded
+    ])]
+
+    req = pb.GetFileInfoList()
+    pkt = pack_rtmp_request(PHONE_COMMAND_GET_FILEINFO_LIST, 3, req)
+    response = rtmp_handler.handle_packet(pkt, client_id=("127.0.0.1", 12345))
+    resp = unpack_rtmp_response(response, pb.FileInfo_List)
+
+    paths = [fi.file_path for fi in resp.file_info]
+    assert paths == ["/DCIM/Camera01/VID_20251221_124744_00_001.insv"]
+    md = pb.ExtraMetadata()
+    md.ParseFromString(resp.file_info[0].metadata)
+    assert md.file_size == 3_000_000_000
+    assert md.creation_time == 20251221124744
+    assert md.total_time > 0
+    assert md.file_group_info.identify == "/DCIM/Camera01/VID_20251221_124744_00_001.insv"
+
+
+def test_rtmp_get_fileinfo_list_unauthorized(rtmp_handler, mock_db):
+    """Unauthenticated code 38 returns an empty list, not a crash."""
+    from server import PHONE_COMMAND_GET_FILEINFO_LIST
+    import insta360_messages_pb2 as pb
+    req = pb.GetFileInfoList()
+    pkt = pack_rtmp_request(PHONE_COMMAND_GET_FILEINFO_LIST, 3, req)
+    response = rtmp_handler.handle_packet(pkt, client_id=("127.0.0.1", 12345))
+    resp = unpack_rtmp_response(response, pb.FileInfo_List)
+    assert len(resp.file_info) == 0
